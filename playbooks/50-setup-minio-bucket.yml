@@ -1,0 +1,84 @@
+- name: Create MinIO bucket and redeploy OTEManager
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+  vars:
+    minio_vmid: 200
+    app_vmid: 202
+    minio_host: "{{ otemanager_minio_ip }}"
+    minio_user: "admin"
+    minio_password: "{{ minio_admin_password }}"
+    bucket_name: "ote-articles"
+    repo_url: "https://github.com/ahzs645/OTEManager.git"
+
+  tasks:
+    - name: Install MinIO client (mc) in MinIO container
+      ansible.builtin.shell: |
+        sudo pct exec {{ minio_vmid }} -- bash -lc "
+          curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x /usr/local/bin/mc
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Configure mc alias
+      ansible.builtin.shell: |
+        sudo pct exec {{ minio_vmid }} -- bash -lc "
+          mc alias set local http://127.0.0.1:9000 {{ minio_user }} '{{ minio_password }}'
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Create bucket
+      ansible.builtin.shell: |
+        sudo pct exec {{ minio_vmid }} -- bash -lc "
+          mc mb local/{{ bucket_name }} --ignore-existing
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Pull latest code in OTEManager container
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd /opt/otemanager && git checkout -- . && git pull
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Install any new npm dependencies
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd /opt/otemanager && npm install
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Rebuild the application
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd /opt/otemanager && npm run build
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Restart OTEManager
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          systemctl restart otemanager
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Verify OTEManager is running
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          sleep 3 && systemctl status otemanager --no-pager
+        "
+      args:
+        executable: /bin/bash
+      register: app_status
+
+    - name: Show status
+      ansible.builtin.debug:
+        msg: "{{ app_status.stdout }}"

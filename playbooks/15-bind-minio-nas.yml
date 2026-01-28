@@ -1,0 +1,39 @@
+- name: Bind mount NAS storage into MinIO container
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    vmid: 200
+    nas_path: /mnt/pve/Documents/minio
+    container_mount: /data
+
+  tasks:
+    - name: Create NAS subdirectory for MinIO
+      ansible.builtin.shell: |
+        mkdir -p {{ nas_path }}
+      args:
+        executable: /bin/bash
+
+    - name: Stop MinIO container
+      ansible.builtin.shell: |
+        sudo pct stop {{ vmid }} || true
+      args:
+        executable: /bin/bash
+
+    - name: Add bind mount to container config
+      ansible.builtin.shell: |
+        sudo pct set {{ vmid }} -mp0 {{ nas_path }},mp={{ container_mount }}
+      args:
+        executable: /bin/bash
+
+    - name: Start MinIO container
+      ansible.builtin.shell: |
+        sudo pct start {{ vmid }}
+      args:
+        executable: /bin/bash
+
+    - name: Fix ownership inside container
+      ansible.builtin.shell: |
+        sleep 5
+        sudo pct exec {{ vmid }} -- bash -lc "chown -R minio:minio /data"
+      args:
+        executable: /bin/bash

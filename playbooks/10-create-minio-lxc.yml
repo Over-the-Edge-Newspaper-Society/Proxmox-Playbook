@@ -1,0 +1,47 @@
+- name: Create MinIO LXC on Proxmox
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+
+  vars:
+    vmid: 200
+    hostname: minio
+    storage: local-lvm
+    ostemplate: "local:vztmpl/debian-13-standard_13.1-1_amd64.tar.zst"
+    cores: 2
+    memory: 1024
+    rootfs_size: 8
+    bridge: vmbr0
+
+  tasks:
+    - name: Create container
+      community.proxmox.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        hostname: "{{ hostname }}"
+        ostemplate: "{{ ostemplate }}"
+        unprivileged: true
+        cores: "{{ cores }}"
+        memory: "{{ memory }}"
+        disk: "{{ storage }}:{{ rootfs_size }}"
+        netif:
+          net0: "name=eth0,bridge={{ bridge }},ip=dhcp"
+        state: present
+
+    - name: Start container
+      community.proxmox.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        hostname: "{{ hostname }}"
+        state: started

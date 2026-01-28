@@ -1,0 +1,20 @@
+- name: Test Proxmox API auth
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+
+  tasks:
+    - name: List existing containers/VMs via API
+      community.proxmox.proxmox_vm_info:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+      register: vms
+
+    - name: Show count
+      ansible.builtin.debug:
+        msg: "Found {{ vms.proxmox_vms | length }} guests on node {{ proxmox_node }}"

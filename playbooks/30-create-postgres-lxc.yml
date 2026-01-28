@@ -1,0 +1,96 @@
+- name: Create and configure PostgreSQL LXC
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+
+  vars:
+    vmid: 201
+    hostname: postgres
+    storage: local-lvm
+    ostemplate: "local:vztmpl/debian-13-standard_13.1-1_amd64.tar.zst"
+    cores: 2
+    memory: 1024
+    rootfs_size: 16
+    bridge: vmbr0
+
+  tasks:
+    - name: Create container
+      community.proxmox.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        hostname: "{{ hostname }}"
+        ostemplate: "{{ ostemplate }}"
+        unprivileged: true
+        cores: "{{ cores }}"
+        memory: "{{ memory }}"
+        disk: "{{ storage }}:{{ rootfs_size }}"
+        netif:
+          net0: "name=eth0,bridge={{ bridge }},ip=dhcp"
+        state: present
+
+    - name: Start container
+      community.proxmox.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+        node: "{{ proxmox_node }}"
+        vmid: "{{ vmid }}"
+        hostname: "{{ hostname }}"
+        state: started
+
+- name: Install and configure PostgreSQL
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+  vars:
+    vmid: 201
+    db_name: otemanager
+    db_user: otemanager
+    db_password: "{{ otemanager_db_password }}"
+
+  tasks:
+    - name: Wait for container to be ready
+      ansible.builtin.shell: |
+        sleep 5
+      args:
+        executable: /bin/bash
+
+    - name: Install PostgreSQL
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -lc "
+          apt-get update -y
+          apt-get install -y postgresql postgresql-client
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Configure PostgreSQL to listen on all interfaces
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -lc "
+          PG_CONF=\$(find /etc/postgresql -name postgresql.conf | head -1)
+          PG_HBA=\$(find /etc/postgresql -name pg_hba.conf | head -1)
+          sed -i \"s/#listen_addresses = 'localhost'/listen_addresses = '*'/\" \$PG_CONF
+          echo 'host all all 10.70.20.0/24 md5' >> \$PG_HBA
+          systemctl restart postgresql
+        "
+      args:
+        executable: /bin/bash
+
+    - name: Create database and user
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -lc "
+          su - postgres -c \"psql -c \\\"CREATE USER {{ db_user }} WITH PASSWORD '{{ db_password }}';\\\"\" || true
+          su - postgres -c \"psql -c \\\"CREATE DATABASE {{ db_name }} OWNER {{ db_user }};\\\"\" || true
+          su - postgres -c \"psql -c \\\"GRANT ALL PRIVILEGES ON DATABASE {{ db_name }} TO {{ db_user }};\\\"\"
+        "
+      args:
+        executable: /bin/bash

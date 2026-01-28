@@ -1,0 +1,37 @@
+- name: Install and run MinIO inside LXC
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+  vars:
+    vmid: 200
+    minio_root_user: "admin"
+    minio_root_password: "{{ minio_admin_password }}"
+
+  tasks:
+    - name: Create env file with credentials
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -c "cat > /etc/default/minio <<ENVEOF
+        MINIO_ROOT_USER={{ minio_root_user }}
+        MINIO_ROOT_PASSWORD={{ minio_root_password }}
+        ENVEOF
+        chmod 600 /etc/default/minio"
+      args:
+        executable: /bin/bash
+
+    - name: Enable and start MinIO
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -lc "systemctl daemon-reload && systemctl enable --now minio"
+      args:
+        executable: /bin/bash
+
+    - name: Check MinIO status
+      ansible.builtin.shell: |
+        sudo pct exec {{ vmid }} -- bash -lc "sleep 3 && systemctl status minio --no-pager"
+      args:
+        executable: /bin/bash
+      register: minio_status
+
+    - name: Show status
+      ansible.builtin.debug:
+        msg: "{{ minio_status.stdout }}"
