@@ -187,10 +187,81 @@ ansible-playbook -i inventory.ini playbooks/50-setup-minio-bucket.yml --ask-vaul
 
 This pulls latest code, installs dependencies, rebuilds, and restarts the service.
 
+## Backup & Restore
+
+### In-app backup (via OTEManager UI)
+
+The app has a built-in backup/restore page at `/utilities/backup` that:
+- **Export:** dumps all database records + downloads all files from MinIO into a ZIP
+- **Import:** reads a ZIP, inserts data into Postgres, uploads files to MinIO
+
+### Manual backup
+
+**PostgreSQL dump:**
+```bash
+ssh ansible@10.70.20.10 "sudo pct exec 201 -- bash -lc 'su - postgres -c \"pg_dumpall\"'" > pg_dumpall.sql
+```
+
+**MinIO files (already on NAS):** files live at `/mnt/pve/Documents/minio` on the Proxmox host, which is your UniFi NAS via NFS. Back up the NAS separately.
+
+### Manual restore
+
+**1. Copy SQL dump to Proxmox host and push into the Postgres container:**
+```bash
+scp pg_dumpall.sql ansible@10.70.20.10:/tmp/pg_dumpall.sql
+ssh ansible@10.70.20.10 "sudo pct push 201 /tmp/pg_dumpall.sql /tmp/pg_dumpall.sql"
+```
+
+**2. Restore the database:**
+```bash
+ssh ansible@10.70.20.10 "sudo pct exec 201 -- bash -lc 'su - postgres -c \"psql -f /tmp/pg_dumpall.sql\"'"
+```
+
+**3. Grant permissions** (the dump may create tables owned by a different user):
+```bash
+ssh ansible@10.70.20.10 "sudo pct exec 201 -- bash -lc \"su - postgres -c \\\"psql -d otemanager -c 'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO otemanager; GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO otemanager;'\\\"\""
+```
+
+**4. Upload files to MinIO** (install `mc` on your Mac first: `brew install minio/stable/mc`):
+```bash
+mc alias set minio http://10.70.20.168:9000 admin YOUR_MINIO_PASSWORD
+mc cp --recursive /path/to/backup/uploads/ minio/ote-articles/
+```
+
+**5. Restart OTEManager:**
+```bash
+ssh ansible@10.70.20.10 "sudo pct exec 202 -- systemctl restart otemanager"
+```
+
+## OTEManager Code Changes
+
+The following changes were made to the OTEManager app to support this infrastructure:
+
+| File | Change |
+|------|--------|
+| `storage/s3.ts` | New S3 storage provider using `@aws-sdk/client-s3` with MinIO (`forcePathStyle: true`) |
+| `storage/index.ts` | Updated factory to auto-select S3 provider when `S3_BUCKET` + `AWS_ACCESS_KEY_ID` are set |
+| `storage/types.ts` | Added `saveFile()` method to `StorageProvider` interface (for backup restore) |
+| `storage/local.ts` | Added `saveFile()` implementation |
+| `app/routes/api/files.$.ts` | Fixed wildcard param: `params._splat` instead of `params._` (TanStack Start) |
+| `app/components/article/PhotoGallery.tsx` | Changed file URLs from `/uploads/` to `/api/files/` |
+| `app/components/article/DocumentList.tsx` | Changed file URLs from `/uploads/` to `/api/files/` |
+| `app/routes/index.tsx` | Added `suppressHydrationWarning` to fix SSR hydration mismatch on relative time |
+
+## Vault Template
+
+A template is provided at `group_vars/proxmox.yml.example`. To create your vault:
+
+```bash
+cp group_vars/proxmox.yml.example group_vars/proxmox.yml
+ansible-vault encrypt group_vars/proxmox.yml
+```
+
+Then edit with `ansible-vault edit group_vars/proxmox.yml` and fill in real values.
+
 ## Future Considerations
 
 - **Static IPs:** Containers currently use DHCP. Consider assigning static IPs so the vault variables don't need updating if a container restarts with a new address.
 - **Semaphore/AWX:** Now that playbooks are working, they can be imported into a web UI for button-click deploys, scheduling, and logs.
-- **Backups:** PostgreSQL dumps and MinIO data (already on NAS) should be included in a backup strategy.
 - **Reverse proxy:** Route through your existing Nginx Proxy Manager (VMID 108) for HTTPS and clean URLs.
 - **NFS export tuning:** Consider `no_root_squash` or `anonuid/anongid` on the UniFi NAS for cleaner MinIO permissions.

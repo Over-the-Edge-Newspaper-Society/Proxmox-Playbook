@@ -1,0 +1,23 @@
+# Proxmox API connection
+# Create an API token at: Datacenter -> Permissions -> API Tokens
+# Token ID is case-sensitive (e.g., "Ansible" not "ansible")
+# Uncheck "Privilege Separation" when creating the token
+proxmox_api_host: "10.70.20.10"
+proxmox_api_user: "root@pam"
+proxmox_api_token_id: "Ansible"
+proxmox_api_token_secret: "YOUR_TOKEN_SECRET_HERE"
+proxmox_validate_certs: false
+proxmox_node: "proxmox"
+
+# MinIO admin credentials
+# Used for the MinIO S3 console and API
+minio_admin_password: "GENERATE_A_STRONG_PASSWORD"
+
+# OTEManager PostgreSQL credentials
+# Password will be URL-encoded automatically in the .env file
+otemanager_db_password: "GENERATE_A_STRONG_PASSWORD"
+
+# Container IPs (fill in after containers are created with DHCP)
+# Get IPs with: ssh ansible@10.70.20.10 "sudo pct exec <VMID> -- hostname -I"
+otemanager_postgres_ip: "FILL_AFTER_VMID_201_CREATED"
+otemanager_minio_ip: "FILL_AFTER_VMID_200_CREATED"

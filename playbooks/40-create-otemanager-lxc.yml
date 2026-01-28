@@ -97,8 +97,9 @@
 
     - name: Create .env file
       ansible.builtin.shell: |
-        sudo pct exec {{ vmid }} -- bash -lc "cat > /opt/otemanager/.env <<'ENVEOF'
-        DATABASE_URL=postgresql://{{ db_user }}:{{ db_password }}@{{ db_host }}:5432/otemanager
+        ENCODED_PW=$(python3 -c "import urllib.parse; print(urllib.parse.quote('{{ db_password }}', safe=''))")
+        sudo pct exec {{ vmid }} -- bash -c "cat > /opt/otemanager/.env <<ENVEOF
+        DATABASE_URL=postgresql://{{ db_user }}:${ENCODED_PW}@{{ db_host }}:5432/otemanager
         UPLOAD_DIR=./uploads
         MAX_FILE_SIZE=52428800
         S3_BUCKET=ote-articles
