@@ -1,0 +1,108 @@
+- name: Update OTEManager from GitHub
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../group_vars/proxmox.yml
+  vars:
+    app_vmid: 202
+    repo_url: "https://github.com/ahzs645/OTEManager.git"
+    app_dir: "/opt/otemanager"
+    run_migrations: true  # Set to false to skip db migrations: -e run_migrations=false
+
+  tasks:
+    - name: Check for available updates
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && git fetch origin && git log HEAD..origin/main --oneline
+        "
+      args:
+        executable: /bin/bash
+      register: updates_available
+      changed_when: false
+
+    - name: Show available updates
+      ansible.builtin.debug:
+        msg: "{{ 'Updates available:\n' + updates_available.stdout if updates_available.stdout else 'No updates available' }}"
+
+    - name: Pull latest code from GitHub
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && git checkout -- . && git pull origin main
+        "
+      args:
+        executable: /bin/bash
+      register: git_pull
+      when: updates_available.stdout | length > 0
+
+    - name: Show git pull result
+      ansible.builtin.debug:
+        msg: "{{ git_pull.stdout }}"
+      when: git_pull is not skipped
+
+    - name: Install npm dependencies
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && npm install
+        "
+      args:
+        executable: /bin/bash
+      when: updates_available.stdout | length > 0
+
+    - name: Run database migrations
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && npx drizzle-kit push --force
+        "
+      args:
+        executable: /bin/bash
+      when: updates_available.stdout | length > 0 and run_migrations | default(true)
+      timeout: 120
+
+    - name: Rebuild the application
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && npm run build
+        "
+      args:
+        executable: /bin/bash
+      when: updates_available.stdout | length > 0
+
+    - name: Restart OTEManager service
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          systemctl restart otemanager
+        "
+      args:
+        executable: /bin/bash
+      when: updates_available.stdout | length > 0
+
+    - name: Wait for service to start
+      ansible.builtin.pause:
+        seconds: 3
+      when: updates_available.stdout | length > 0
+
+    - name: Verify OTEManager is running
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          systemctl status otemanager --no-pager
+        "
+      args:
+        executable: /bin/bash
+      register: app_status
+
+    - name: Show service status
+      ansible.builtin.debug:
+        msg: "{{ app_status.stdout }}"
+
+    - name: Show current version
+      ansible.builtin.shell: |
+        sudo pct exec {{ app_vmid }} -- bash -lc "
+          cd {{ app_dir }} && git log -1 --format='%h - %s (%ci)'
+        "
+      args:
+        executable: /bin/bash
+      register: current_version
+
+    - name: Display current version
+      ansible.builtin.debug:
+        msg: "Current version: {{ current_version.stdout }}"

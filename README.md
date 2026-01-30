@@ -68,7 +68,8 @@ proxmox-setup/
 │   ├── 20-install-minio.yml                # Install and start MinIO
 │   ├── 30-create-postgres-lxc.yml          # Create and configure PostgreSQL
 │   ├── 40-create-otemanager-lxc.yml        # Create and deploy OTEManager app
-│   └── 50-setup-minio-bucket.yml           # Create S3 bucket, redeploy app
+│   ├── 50-setup-minio-bucket.yml           # Create S3 bucket, redeploy app
+│   └── 60-update-otemanager.yml            # Update OTEManager from GitHub
 └── README.md
 ```
 
@@ -177,15 +178,27 @@ ansible-playbook -i inventory.ini playbooks/50-setup-minio-bucket.yml --ask-vaul
 | PostgreSQL | 10.70.20.127:5432 | otemanager / (vault password) |
 | Proxmox UI | https://10.70.20.10:8006 | root / (your password) |
 
-## Redeploying OTEManager
+## Updating OTEManager
 
 After pushing code changes to GitHub:
 
 ```bash
-ansible-playbook -i inventory.ini playbooks/50-setup-minio-bucket.yml --ask-vault-pass
+ansible-playbook -i inventory.ini playbooks/60-update-otemanager.yml --ask-vault-pass
 ```
 
-This pulls latest code, installs dependencies, rebuilds, and restarts the service.
+This playbook:
+1. Checks for available updates (shows commit messages)
+2. Pulls latest code from GitHub (only if updates exist)
+3. Installs npm dependencies
+4. Runs database migrations (`drizzle-kit push --force`)
+5. Rebuilds the application
+6. Restarts the service
+7. Verifies the service is running and shows current version
+
+**Options:**
+- Skip migrations: `ansible-playbook -i inventory.ini playbooks/60-update-otemanager.yml --ask-vault-pass -e run_migrations=false`
+
+**Note:** The playbook skips the build/restart steps if there are no updates available.
 
 ## Backup & Restore
 
