@@ -196,7 +196,12 @@ This playbook:
 7. Verifies the service is running and shows current version
 
 **Options:**
-- Skip migrations: `ansible-playbook -i inventory.ini playbooks/60-update-otemanager.yml --ask-vault-pass -e run_migrations=false`
+- Run with migrations: `ansible-playbook -i inventory.ini playbooks/60-update-otemanager.yml --ask-vault-pass -e run_migrations=true`
+
+**Note:** Migrations are disabled by default since they can hang in non-interactive mode. Run migrations manually when schema changes:
+```bash
+ssh ansible@10.70.20.10 "sudo pct exec 202 -- bash -lc 'cd /opt/otemanager && npx drizzle-kit push'"
+```
 
 **Note:** The playbook skips the build/restart steps if there are no updates available.
 

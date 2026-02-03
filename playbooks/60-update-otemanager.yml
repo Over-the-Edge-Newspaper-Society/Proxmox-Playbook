@@ -7,7 +7,7 @@
     app_vmid: 202
     repo_url: "https://github.com/ahzs645/OTEManager.git"
     app_dir: "/opt/otemanager"
-    run_migrations: true  # Set to false to skip db migrations: -e run_migrations=false
+    run_migrations: false  # Set to true to run db migrations: -e run_migrations=true
 
   tasks:
     - name: Check for available updates
