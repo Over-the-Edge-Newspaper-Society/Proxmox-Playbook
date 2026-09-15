@@ -184,6 +184,45 @@ curl -s -o /dev/null -w "%{http_code} ssl_verify=%{ssl_verify_result}\n" \
 
 ## Operational gotchas
 
+### `kubectl apply -k` can take a service down
+
+Images built on the node are tagged at build time and patched into the **live**
+Deployment by the deploy script. The manifests in `k8s/*/base` keep
+`:placeholder`, which is not a real tag.
+
+So applying a whole base re-applies `:placeholder`, and the Deployment rolls to
+a pod that can never start:
+
+```
+docker.io/eventscrape-local/worker:placeholder   ImagePullBackOff
+```
+
+This is not hypothetical -- reapplying `eventscrape/base` to fix an unrelated
+namespace mistake put the worker in ImagePullBackOff for 70 minutes. The admin
+UI kept answering 200 from its old ReplicaSet, so nothing looked wrong from
+outside.
+
+Affected: `eventscrape-admin`, `eventscrape-worker`, `otemanager`.
+
+- To change one file, apply **that file**, not the base:
+  `kubectl apply -f k8s/eventscrape/base/ingress.yaml`
+- To deploy code, use the script.
+- To recover:
+
+```bash
+k3s ctr -n k8s.io images ls -q | grep eventscrape     # find the real tag
+kubectl -n eventscrape set image deploy/eventscrape-worker \
+  '*=docker.io/eventscrape-local/worker:<tag>'
+```
+
+Check for it with a server dry-run, which reports drift without changing
+anything:
+
+```bash
+kubectl apply -k k8s/eventscrape/base --dry-run=server
+```
+
+
 **A ConfigMap edit does not restart pods.** After changing the nginx CSP config,
 the manifest said one thing and the wire said another for several minutes. If
 config "should have applied" but has not, check the actual response and then

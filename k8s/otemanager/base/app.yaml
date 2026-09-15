@@ -15,6 +15,15 @@ spec:
       containers:
         - name: app
           # Replaced by the overlay with the tag built on the node.
+          # WARNING: ':placeholder' is never runnable. The real tag is built on the
+          # node and patched in by the deploy script, so it exists only in the
+          # LIVE object, not here. A plain `kubectl apply -k` on this base RESETS
+          # the tag to :placeholder and the pod goes ImagePullBackOff -- which is
+          # exactly how the worker ended up down for 70 minutes. Deploy with the
+          # script; to touch only ingress, apply that one file, not the whole base.
+          # Recover with:
+          #   kubectl -n <ns> set image deploy/<name> '*=<image>:<tag-on-node>'
+          #   # list tags: k3s ctr -n k8s.io images ls -q | grep <name>
           image: docker.io/otemanager-local/app:placeholder
           imagePullPolicy: IfNotPresent
           ports:
