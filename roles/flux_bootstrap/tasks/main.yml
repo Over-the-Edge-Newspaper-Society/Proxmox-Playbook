@@ -1,0 +1,30 @@
+---
+- name: Install Flux CLI
+  ansible.builtin.shell: |
+    curl -s https://fluxcd.io/install.sh | bash
+  args:
+    creates: /usr/local/bin/flux
+
+- name: Check if Flux is already bootstrapped
+  ansible.builtin.command: flux check
+  register: flux_check
+  changed_when: false
+  failed_when: false
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Bootstrap Flux with GitHub
+  ansible.builtin.command: >
+    flux bootstrap github
+    --owner={{ flux_github_owner }}
+    --repository={{ flux_github_repo }}
+    --branch={{ flux_github_branch }}
+    --path={{ flux_path }}
+    --personal
+    --read-write-key
+    --components-extra=image-reflector-controller,image-automation-controller
+  environment:
+    GITHUB_TOKEN: "{{ github_token }}"
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: flux_check.rc != 0
+  changed_when: true

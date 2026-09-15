@@ -1,0 +1,14 @@
+# Bootstraps Flux CD on the K3s cluster for GitOps.
+#
+#   ansible-playbook playbooks/85-bootstrap-flux.yml
+#
+# Requires `github_token` (a GitHub PAT with repo scope) in
+# group_vars/proxmox.yml. Optional — the cluster is fully functional without it.
+- name: Bootstrap Flux CD
+  hosts: k3s
+  become: true
+  tags: [flux]
+  vars_files:
+    - ../group_vars/proxmox.yml
+  roles:
+    - flux_bootstrap

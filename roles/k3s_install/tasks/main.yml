@@ -1,0 +1,61 @@
+---
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
+- name: Install K3s server
+  ansible.builtin.command:
+    cmd: /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: >-
+      {{ k3s_role }}
+      --cluster-cidr={{ k3s_cluster_cidr }}
+      --service-cidr={{ k3s_service_cidr }}
+      {% for svc in k3s_disable %}--disable={{ svc }} {% endfor %}
+      --write-kubeconfig-mode=644
+  changed_when: true
+  when: k3s_role == "server"
+
+- name: Install K3s agent
+  ansible.builtin.command:
+    cmd: /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: agent
+    K3S_URL: "{{ k3s_server_url }}"
+    K3S_TOKEN: "{{ k3s_token }}"
+  changed_when: true
+  when: k3s_role == "agent"
+
+- name: Wait for K3s to be ready
+  ansible.builtin.command: k3s kubectl get nodes
+  register: k3s_nodes
+  until: k3s_nodes.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+  when: k3s_role == "server"
+
+- name: Show node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines
+  when: k3s_role == "server"
+
+- name: Fetch kubeconfig to local machine
+  ansible.builtin.fetch:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "{{ playbook_dir }}/../kubeconfig.yml"
+    flat: true
+  when: k3s_role == "server"
+
+- name: Patch kubeconfig with the VM's real IP
+  ansible.builtin.replace:
+    path: "{{ playbook_dir }}/../kubeconfig.yml"
+    regexp: "127\\.0\\.0\\.1"
+    replace: "{{ ansible_host }}"
+  delegate_to: localhost
+  become: false
+  when: k3s_role == "server"

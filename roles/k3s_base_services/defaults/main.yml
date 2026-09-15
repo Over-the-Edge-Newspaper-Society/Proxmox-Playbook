@@ -1,0 +1,19 @@
+---
+# MetalLB
+metallb_version: v0.14.9
+# Top of the 10.70.20.0/24 subnet. PREREQUISITE: the UniFi DHCP pool must be
+# capped below .240 or these LoadBalancer IPs will collide with DHCP leases.
+metallb_address_range: 10.70.20.240-10.70.20.250
+
+# Headlamp
+headlamp_version: 0.25.0
+
+# NFS storage.
+# The UNAS Pro (10.70.20.101) restricts every export to specific client IPs and
+# currently only permits 10.70.20.10 (the Proxmox host), so the k3s node cannot
+# mount it directly. Proxmox therefore re-exports a directory to the cluster.
+# See docs: kubernetes/networking (Storage strategy) — this export must exist
+# before nfs-csi can provision anything.
+nfs_server: 10.70.20.10
+nfs_path: /mnt/nas-k8s
+nfs_csi_version: v4.9.0

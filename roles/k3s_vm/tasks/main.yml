@@ -1,0 +1,92 @@
+---
+# Creates a K3s VM by cloning a cloud-init template on Proxmox.
+# Requires: a cloud-init template already exists (see playbooks/create-cloudinit-template.yml)
+
+- name: Clone cloud-init template to K3s VM
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ k3s_vm_template_id }}"
+    name: "{{ k3s_vm_name }}"
+    newid: "{{ k3s_vm_id }}"
+    clone: "{{ k3s_vm_template }}"
+    full: true
+    storage: "{{ k3s_vm_storage }}"
+    timeout: 300
+
+
+- name: Configure VM hardware
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ k3s_vm_id }}"
+    cores: "{{ k3s_vm_cores }}"
+    memory: "{{ k3s_vm_memory }}"
+    balloon: "{{ k3s_vm_balloon }}"
+    net:
+      net0: "virtio,bridge={{ k3s_vm_bridge }}"
+    update: true
+
+
+- name: Set cloud-init config
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ k3s_vm_id }}"
+    ciuser: "{{ k3s_vm_user }}"
+    ipconfig:
+      ipconfig0: "ip={{ k3s_vm_ip }},gw={{ k3s_vm_gateway }}"
+    nameservers: "{{ k3s_vm_nameserver }}"
+    sshkeys: "{{ lookup('file', k3s_vm_ssh_key_file) }}"
+    update: true
+
+
+- name: Resize VM disk
+  community.general.proxmox_disk:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    vmid: "{{ k3s_vm_id }}"
+    disk: scsi0
+    size: "{{ k3s_vm_disk_size }}"
+    state: resized
+
+
+- name: Start the VM
+  community.general.proxmox_kvm:
+    api_host: "{{ proxmox_api_host }}"
+    api_port: "{{ proxmox_api_port }}"
+    api_user: "{{ proxmox_api_user }}"
+    api_token_id: "{{ proxmox_api_token_id }}"
+    api_token_secret: "{{ proxmox_api_token_secret }}"
+    validate_certs: "{{ proxmox_validate_certs }}"
+    node: "{{ proxmox_node }}"
+    vmid: "{{ k3s_vm_id }}"
+    state: started
+
+
+- name: Wait for VM to be reachable via SSH
+  ansible.builtin.wait_for:
+    host: "{{ k3s_vm_ip | regex_replace('/.*', '') }}"
+    port: 22
+    delay: 10
+    timeout: 120
+

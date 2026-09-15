@@ -1,0 +1,53 @@
+# Sets up the NFS export that backs every PersistentVolume in the cluster.
+#
+#   ansible-playbook playbooks/75-setup-k8s-nfs-export.yml
+#
+# MUST run before 80-create-k3s-cluster.yml, because that playbook makes
+# `nfs-nas` the default StorageClass. If this export does not exist, every PVC
+# in the cluster hangs in Pending forever with no obvious error.
+#
+# NOTE: this exports a LOCAL directory on pve-root (94 GB), not the NAS.
+# The UNAS Pro at 10.70.20.101 restricts each export to a client allow-list that
+# currently contains only 10.70.20.10, and it has no K8s share. See README.
+- name: Export /mnt/nas-k8s to the K3s node
+  hosts: proxmox_root
+  gather_facts: false
+  vars:
+    nfs_export_path: /mnt/nas-k8s
+    nfs_client: 10.70.20.50/32
+    nfs_options: rw,sync,no_subtree_check,no_root_squash
+
+  tasks:
+    - name: Install nfs-kernel-server
+      ansible.builtin.apt:
+        name: nfs-kernel-server
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the export directory
+      ansible.builtin.file:
+        path: "{{ nfs_export_path }}"
+        state: directory
+        mode: "0777"
+
+    # no_root_squash is required so the NFS CSI driver can chown the
+    # per-volume directories it provisions.
+    - name: Declare the export
+      ansible.builtin.lineinfile:
+        path: /etc/exports
+        regexp: "^{{ nfs_export_path }}\\s"
+        line: "{{ nfs_export_path }} {{ nfs_client }}({{ nfs_options }})"
+        create: true
+      notify: Reload exports
+
+    - name: Enable and start nfs-kernel-server
+      ansible.builtin.systemd:
+        name: nfs-kernel-server
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload exports
+      ansible.builtin.command: exportfs -ra
+      changed_when: true

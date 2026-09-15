@@ -1,0 +1,31 @@
+---
+# The existing group_vars/proxmox.yml defines proxmox_api_host/user/token/node
+# but not a port. 8006 is Proxmox's own API port and is reachable directly on
+# 10.70.20.10. Override in the vault if that ever changes.
+proxmox_api_port: 8006
+
+# K3s VM settings, sized against the real host:
+#   AMD Ryzen AI 9 HX 370 — 12 cores / 24 threads, 27 GB RAM,
+#   94 GB pve-root + ~816 GB local-lvm thin pool.
+k3s_vm_id: 210             # 200/201 are the minio and postgres LXCs; 210 is the first clear slot
+k3s_vm_name: k3s-node-1
+k3s_vm_template: ubuntu-2404-cloudinit
+k3s_vm_template_id: 9000   # source template cloned by this role (see 70-create-cloudinit-template.yml)
+k3s_vm_cores: 8
+k3s_vm_memory: 12288       # 12 GB ceiling
+k3s_vm_balloon: 4096       # Proxmox reclaims down to 4 GB under host pressure
+k3s_vm_disk_size: 60G
+k3s_vm_storage: local-lvm
+k3s_vm_bridge: vmbr0
+
+# Network — same flat 10.70.20.0/24 the LXC stack uses.
+#   .1 gateway/DNS   .10 proxmox   .101 UNAS Pro
+#   .127 postgres    .168 minio
+k3s_vm_ip: 10.70.20.50/24
+k3s_vm_gateway: 10.70.20.1
+k3s_vm_nameserver: 10.70.20.1
+
+# Public half is injected into the VM via cloud-init; Ansible then reaches the
+# node with the matching private key (see inventory.ini).
+k3s_vm_ssh_key_file: ~/.ssh/personalprox_pve_ed25519.pub
+k3s_vm_user: ubuntu

@@ -1,0 +1,6 @@
+---
+flux_version: "2.4.0"
+flux_github_owner: ahzs645
+flux_github_repo: personalprox
+flux_github_branch: main
+flux_path: flux/flux-system

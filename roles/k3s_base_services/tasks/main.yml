@@ -1,0 +1,120 @@
+---
+- name: Install Helm
+  ansible.builtin.shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args:
+    creates: /usr/local/bin/helm
+
+# --- NFS CSI Driver (default storage on NAS) ---
+
+- name: Add NFS CSI Helm repo
+  kubernetes.core.helm_repository:
+    name: csi-driver-nfs
+    repo_url: https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+- name: Install NFS CSI driver
+  kubernetes.core.helm:
+    name: csi-driver-nfs
+    chart_ref: csi-driver-nfs/csi-driver-nfs
+    chart_version: "{{ nfs_csi_version }}"
+    release_namespace: kube-system
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    wait: true
+
+- name: Demote local-path from default StorageClass
+  ansible.builtin.command: >
+    k3s kubectl patch storageclass local-path
+    -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+  changed_when: true
+
+- name: Create NFS StorageClass as default
+  ansible.builtin.copy:
+    dest: /tmp/nfs-storageclass.yml
+    mode: "0644"
+    content: |
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: nfs-nas
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+      provisioner: nfs.csi.k8s.io
+      parameters:
+        server: {{ nfs_server }}
+        share: {{ nfs_path }}
+      reclaimPolicy: Retain
+      volumeBindingMode: Immediate
+      mountOptions:
+        - hard
+        - nointr
+
+- name: Apply NFS StorageClass
+  ansible.builtin.command: k3s kubectl apply -f /tmp/nfs-storageclass.yml
+  changed_when: true
+
+# --- MetalLB ---
+
+- name: Add MetalLB Helm repo
+  kubernetes.core.helm_repository:
+    name: metallb
+    repo_url: https://metallb.github.io/metallb
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+- name: Install MetalLB
+  kubernetes.core.helm:
+    name: metallb
+    chart_ref: metallb/metallb
+    chart_version: "{{ metallb_version }}"
+    release_namespace: metallb-system
+    create_namespace: true
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    wait: true
+
+- name: Wait for MetalLB controller to be ready
+  ansible.builtin.command: >
+    k3s kubectl -n metallb-system wait deployment metallb-controller
+    --for=condition=Available --timeout=120s
+  changed_when: false
+
+- name: Apply MetalLB L2 address pool
+  ansible.builtin.copy:
+    dest: /tmp/metallb-config.yml
+    mode: "0644"
+    content: |
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: default-pool
+        namespace: metallb-system
+      spec:
+        addresses:
+          - {{ metallb_address_range }}
+      ---
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: default-l2
+        namespace: metallb-system
+
+- name: Apply MetalLB config
+  ansible.builtin.command: k3s kubectl apply -f /tmp/metallb-config.yml
+  changed_when: true
+
+# --- Headlamp ---
+
+- name: Add Headlamp Helm repo
+  kubernetes.core.helm_repository:
+    name: headlamp
+    repo_url: https://kubernetes-sigs.github.io/headlamp/
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+- name: Install Headlamp
+  kubernetes.core.helm:
+    name: headlamp
+    chart_ref: headlamp/headlamp
+    chart_version: "{{ headlamp_version }}"
+    release_namespace: headlamp
+    create_namespace: true
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    wait: true

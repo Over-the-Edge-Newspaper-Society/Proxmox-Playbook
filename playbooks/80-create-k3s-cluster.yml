@@ -1,0 +1,31 @@
+# Builds the K3s cluster: creates the VM from the cloud-init template, prepares
+# the OS, installs K3s, and deploys base services (NFS CSI, MetalLB, Headlamp).
+#
+#   ansible-playbook playbooks/80-create-k3s-cluster.yml
+#
+# Skip VM creation if the VM already exists:
+#   ansible-playbook playbooks/80-create-k3s-cluster.yml --skip-tags vm
+# Only create the VM:
+#   ansible-playbook playbooks/80-create-k3s-cluster.yml --tags vm
+#
+# Prerequisites: 70-create-cloudinit-template.yml and 75-setup-k8s-nfs-export.yml.
+
+# --- Phase 1: create the VM via the Proxmox API (runs locally) ---
+- name: Create K3s VM on Proxmox
+  hosts: localhost
+  gather_facts: false
+  become: false
+  tags: [vm]
+  vars_files:
+    - ../group_vars/proxmox.yml
+  roles:
+    - k3s_vm
+
+# --- Phase 2: prepare the OS and install K3s inside the VM ---
+- name: Prepare and install K3s
+  hosts: k3s
+  become: true
+  roles:
+    - k3s_prepare
+    - k3s_install
+    - k3s_base_services

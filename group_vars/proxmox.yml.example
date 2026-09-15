@@ -21,3 +21,15 @@ otemanager_db_password: "GENERATE_A_STRONG_PASSWORD"
 # Get IPs with: ssh ansible@10.70.20.10 "sudo pct exec <VMID> -- hostname -I"
 otemanager_postgres_ip: "FILL_AFTER_VMID_201_CREATED"
 otemanager_minio_ip: "FILL_AFTER_VMID_200_CREATED"
+
+# ----------------------------------------------------------------------------
+# K3s additions (playbooks 70-85)
+# ----------------------------------------------------------------------------
+
+# Proxmox API port. Optional — roles default to 8006, which is reachable
+# directly on 10.70.20.10. Set it only if you front the API on another port.
+# proxmox_api_port: 8006
+
+# GitHub PAT with `repo` scope. Only needed for 85-bootstrap-flux.yml.
+# The cluster is fully functional without Flux; leave this unset to skip GitOps.
+# github_token: "ghp_YOUR_TOKEN_HERE"

@@ -1,0 +1,83 @@
+# Creates the Ubuntu 24.04 cloud-init VM template that 80-create-k3s-cluster.yml
+# clones. Run once. Idempotent: skips creation if the template VMID already exists.
+#
+#   ansible-playbook playbooks/70-create-cloudinit-template.yml
+#
+# Runs as root because `qm` is not in the ansible user's sudoers grant.
+- name: Create Ubuntu 24.04 cloud-init template
+  hosts: proxmox_root
+  gather_facts: false
+  vars:
+    template_vmid: 9000
+    template_name: ubuntu-2404-cloudinit
+    ubuntu_image_url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    ubuntu_image_path: /tmp/noble-server-cloudimg-amd64.img
+    storage: local-lvm
+
+  tasks:
+    - name: Download Ubuntu 24.04 cloud image
+      ansible.builtin.get_url:
+        url: "{{ ubuntu_image_url }}"
+        dest: "{{ ubuntu_image_path }}"
+        mode: "0644"
+
+    - name: Check if template VM already exists
+      ansible.builtin.shell: qm status {{ template_vmid }}
+      register: template_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create template VM
+      when: template_check.rc != 0
+      block:
+        - name: Create VM
+          ansible.builtin.command: >
+            qm create {{ template_vmid }}
+            --name {{ template_name }}
+            --ostype l26
+            --machine q35
+            --bios ovmf
+            --cpu host
+            --cores 2
+            --memory 2048
+            --net0 virtio,bridge=vmbr0
+            --scsihw virtio-scsi-single
+            --agent enabled=1
+          changed_when: true
+
+        - name: Add EFI disk
+          ansible.builtin.command: >
+            qm set {{ template_vmid }}
+            --efidisk0 {{ storage }}:0,efitype=4m,pre-enrolled-keys=1
+          changed_when: true
+
+        - name: Import cloud image as disk
+          ansible.builtin.command: >
+            qm importdisk {{ template_vmid }} {{ ubuntu_image_path }} {{ storage }}
+          changed_when: true
+
+        - name: Attach imported disk
+          ansible.builtin.command: >
+            qm set {{ template_vmid }}
+            --scsi0 {{ storage }}:vm-{{ template_vmid }}-disk-1,discard=on,ssd=1
+          changed_when: true
+
+        - name: Set boot order
+          ansible.builtin.command: qm set {{ template_vmid }} --boot order=scsi0
+          changed_when: true
+
+        - name: Add cloud-init drive
+          ansible.builtin.command: qm set {{ template_vmid }} --ide2 {{ storage }}:cloudinit
+          changed_when: true
+
+        - name: Enable serial console
+          ansible.builtin.command: qm set {{ template_vmid }} --serial0 socket --vga serial0
+          changed_when: true
+
+        - name: Convert to template
+          ansible.builtin.command: qm template {{ template_vmid }}
+          changed_when: true
+
+    - name: Template status
+      ansible.builtin.debug:
+        msg: "Template {{ template_name }} (VMID {{ template_vmid }}) is ready."

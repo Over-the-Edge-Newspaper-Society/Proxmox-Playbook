@@ -1,2 +1,10 @@
 .DS_Store
 *.retry
+
+# Cluster admin credentials written by 80-create-k3s-cluster.yml.
+# This grants full control of the K3s cluster — never commit it.
+kubeconfig.yml
+
+# Vault password, if you ever keep one on disk (see ansible.cfg)
+.vault-pass
+*.vault-pass
