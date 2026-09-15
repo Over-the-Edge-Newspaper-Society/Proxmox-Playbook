@@ -1,0 +1,75 @@
+# paperless-ngx v3.1.3 (CT 102 ran v2.18.4).
+#
+# v3.0.0 breaking changes that were checked before upgrading:
+#   - pre/post-consume script arguments changed  -> none configured
+#   - API v1 removed, API < v9 dropped           -> nothing but the web UI uses it
+#   - Python 3.10 dropped                        -> container-provided
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paperless, namespace: paperless}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}     # single writer against the NFS data dir
+  selector: {matchLabels: {app: paperless}}
+  template:
+    metadata: {labels: {app: paperless}}
+    spec:
+      containers:
+        - name: paperless
+          image: ghcr.io/paperless-ngx/paperless-ngx:3.1.3
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8000, name: http}]
+          env:
+            - {name: PAPERLESS_REDIS, value: "redis://paperless-valkey:6379"}
+            - {name: PAPERLESS_DBHOST, value: paperless-postgres}
+            - {name: PAPERLESS_DBPORT, value: "5432"}
+            - {name: PAPERLESS_DBNAME, value: paperlessdb}
+            - {name: PAPERLESS_DBUSER, value: paperless}
+            - name: PAPERLESS_DBPASS
+              valueFrom: {secretKeyRef: {name: paperless-secret, key: PAPERLESS_DBPASS}}
+            # Carried over from the LXC so existing sessions/tokens stay valid.
+            - name: PAPERLESS_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: paperless-secret, key: PAPERLESS_SECRET_KEY}}
+            - {name: PAPERLESS_CONSUMPTION_DIR, value: /usr/src/paperless/consume}
+            - {name: PAPERLESS_DATA_DIR, value: /usr/src/paperless/data}
+            - {name: PAPERLESS_MEDIA_ROOT, value: /usr/src/paperless/media}
+            # Stateless converters, now in-cluster instead of CT 104 / CT 105.
+            - {name: PAPERLESS_TIKA_ENABLED, value: "true"}
+            - {name: PAPERLESS_TIKA_ENDPOINT, value: "http://paperless-tika:9998"}
+            - {name: PAPERLESS_TIKA_GOTENBERG_ENDPOINT, value: "http://paperless-gotenberg:3000"}
+            # Preserved from the original paperless.conf.
+            - {name: PAPERLESS_CONSUMER_RECURSIVE, value: "true"}
+            - {name: PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS, value: "true"}
+            - {name: PAPERLESS_CONSUMER_DELETE_DUPLICATES, value: "false"}
+            - {name: PAPERLESS_CONSUMER_IGNORE_PATTERNS, value: '[".DS_STORE/*", "._*", ".stfolder/*", ".stversions/*", ".localized/*", "desktop.ini"]'}
+            - {name: PAPERLESS_URL, value: "https://paperless.k8s.overtheedgepaper.ca"}
+            - {name: PAPERLESS_TIME_ZONE, value: America/Vancouver}
+            # REQUIRED. Kubernetes injects service-discovery env vars named
+            # <SERVICE>_PORT for every Service in the namespace. The Service here
+            # is called `paperless`, so it injects
+            #   PAPERLESS_PORT=tcp://10.43.x.x:8000
+            # which Paperless reads as ITS OWN port setting, and granian dies with
+            #   Invalid value for '--port': 'tcp://...' is not a valid integer
+            # Setting it explicitly overrides the injected value.
+            - {name: PAPERLESS_PORT, value: "8000"}
+          volumeMounts:
+            - {name: data, mountPath: /usr/src/paperless/consume, subPath: consume}
+            - {name: data, mountPath: /usr/src/paperless/data,    subPath: data}
+            - {name: data, mountPath: /usr/src/paperless/media,   subPath: media}
+          readinessProbe:
+            httpGet: {path: /accounts/login/, port: 8000}
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 20
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {memory: 3Gi}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: paperless-data}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paperless, namespace: paperless}
+spec:
+  selector: {app: paperless}
+  ports: [{name: http, port: 8000, targetPort: 8000}]

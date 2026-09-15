@@ -1,0 +1,47 @@
+# Plain HTTP on the internal-only .k8s.ote suffix.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: otemanager-ingress
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: otemanager.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: otemanager
+                port:
+                  number: 80
+---
+# HTTPS using the wildcard issued by cert-manager (letsencrypt-cloudflare).
+# The `tls:` block is what actually presents the certificate — the annotation
+# alone only selects the websecure entrypoint and leaves Traefik serving its
+# own self-signed default.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: otemanager-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: otemanager-tls
+      hosts:
+        - otemanager.k8s.overtheedgepaper.ca
+  rules:
+    - host: otemanager.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: otemanager
+                port:
+                  number: 80

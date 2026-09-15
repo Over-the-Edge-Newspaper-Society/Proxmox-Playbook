@@ -1,0 +1,46 @@
+# Convex dashboard: a full read/write UI over the database.
+# Deployed WITHOUT an Ingress on purpose — reach it with:
+#   kubectl -n eventscrape port-forward svc/eventscrape-convex-dashboard 6791:6791
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventscrape-convex-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eventscrape-convex-dashboard
+  template:
+    metadata:
+      labels:
+        app: eventscrape-convex-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/get-convex/convex-dashboard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6791
+              name: http
+          env:
+            # Browser-facing URL: the dashboard runs in your browser too.
+            - name: NEXT_PUBLIC_DEPLOYMENT_URL
+              value: https://convex-events.k8s.overtheedgepaper.ca
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eventscrape-convex-dashboard
+spec:
+  selector:
+    app: eventscrape-convex-dashboard
+  ports:
+    - name: http
+      port: 6791
+      targetPort: 6791

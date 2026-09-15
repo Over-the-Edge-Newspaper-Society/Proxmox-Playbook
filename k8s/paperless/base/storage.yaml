@@ -1,0 +1,28 @@
+# The documents already live on the NAS at Documents/.data/paperless - the LXC
+# reached them through a Proxmox bind mount (/srv/paperless -> /opt/paperless).
+# Mounted directly from the node here; nothing is copied.
+#   media   3.5 G   the documents themselves
+#   consume 135 M   inbox watched for new files
+#   data     80 M   index, classifier model, thumbnails
+# static/ is NOT mounted - the container generates its own.
+apiVersion: v1
+kind: PersistentVolume
+metadata: {name: paperless-data}
+spec:
+  capacity: {storage: 200Gi}
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [vers=3, hard, noatime]
+  nfs:
+    server: 10.70.20.101
+    path: /volume/75b8b525-ccff-4d03-bca0-8bfbb76b8e03/.srv/.unifi-drive/Documents/.data/paperless
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: paperless-data, namespace: paperless}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: paperless-data
+  resources: {requests: {storage: 200Gi}}

@@ -1,0 +1,100 @@
+# Immich server + machine learning, v3.2.1.
+#
+# The library is mounted READ-ONLY for first boot so the new version cannot
+# modify files while the old Immich in CT 100 is still running against the same
+# NFS directory. Immich performs a write test against its media root at startup,
+# so this may block startup - that is the point of testing it before granting
+# write access.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: immich-ml-cache, namespace: immich}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources: {requests: {storage: 20Gi}}   # CLIP / face-recognition models
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: immich-server, namespace: immich}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: immich-server}}
+  template:
+    metadata: {labels: {app: immich-server}}
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/immich-app/immich-server:v3.2.1
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 2283, name: http}]
+          env:
+            - {name: DB_HOSTNAME, value: immich-postgres}
+            - {name: DB_PORT, value: "5432"}
+            - {name: DB_USERNAME, value: immich}
+            - {name: DB_DATABASE_NAME, value: immich}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: immich-secret, key: DB_PASSWORD}}
+            - {name: REDIS_HOSTNAME, value: immich-valkey}
+            - {name: REDIS_PORT, value: "6379"}
+            - {name: IMMICH_MACHINE_LEARNING_URL, value: "http://immich-machine-learning:3003"}
+            # Media root. The NFS PV points at immich/data, which already holds
+            # library/, upload/, thumbs/, encoded-video/, profile/, backups/.
+            - {name: IMMICH_MEDIA_LOCATION, value: /data}
+            - {name: TZ, value: America/Vancouver}
+          volumeMounts:
+            - {name: library, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /api/server/ping, port: 2283}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {memory: 4Gi}
+      volumes:
+        - {name: library, persistentVolumeClaim: {claimName: immich-library}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: immich-server, namespace: immich}
+spec:
+  selector: {app: immich-server}
+  ports: [{name: http, port: 2283, targetPort: 2283}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: immich-machine-learning, namespace: immich}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: immich-machine-learning}}
+  template:
+    metadata: {labels: {app: immich-machine-learning}}
+    spec:
+      containers:
+        - name: ml
+          image: ghcr.io/immich-app/immich-machine-learning:v3.2.1
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 3003, name: http}]
+          env:
+            - {name: TZ, value: America/Vancouver}
+          volumeMounts:
+            - {name: cache, mountPath: /cache}
+          readinessProbe:
+            httpGet: {path: /ping, port: 3003}
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            failureThreshold: 12
+          resources:
+            requests: {cpu: 200m, memory: 1Gi}
+            limits: {memory: 4Gi}
+      volumes:
+        - {name: cache, persistentVolumeClaim: {claimName: immich-ml-cache}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: immich-machine-learning, namespace: immich}
+spec:
+  selector: {app: immich-machine-learning}
+  ports: [{name: http, port: 3003, targetPort: 3003}]

@@ -1,0 +1,50 @@
+# PostgreSQL 16 - matches the source cluster in CT 102. A PG16 dump cannot be
+# restored into an older major version.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: paperless-postgres-data, namespace: paperless}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path     # Postgres on NFS risks locking/corruption
+  resources: {requests: {storage: 10Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paperless-postgres, namespace: paperless}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: paperless-postgres}}
+  template:
+    metadata: {labels: {app: paperless-postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 5432}]
+          env:
+            # Must match the source: role `paperless` owns db `paperlessdb`.
+            - {name: POSTGRES_USER, value: paperless}
+            - {name: POSTGRES_DB, value: paperlessdb}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: paperless-secret, key: PAPERLESS_DBPASS}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+          readinessProbe:
+            exec: {command: ["sh","-c","pg_isready -U paperless -d paperlessdb"]}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 8
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: paperless-postgres-data}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paperless-postgres, namespace: paperless}
+spec:
+  selector: {app: paperless-postgres}
+  ports: [{port: 5432, targetPort: 5432}]

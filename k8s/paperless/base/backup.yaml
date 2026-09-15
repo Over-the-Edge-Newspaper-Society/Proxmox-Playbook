@@ -1,0 +1,89 @@
+# Postgres backup to the NAS.
+#
+# Same rationale as Immich: the database lives on local-path (node disk),
+# because Postgres over NFS risks corruption on an unclean stop. That means it
+# does NOT survive a node rebuild. These dumps are what makes that acceptable,
+# since they land on the NAS, which is itself backed up.
+#
+# The DOCUMENTS themselves are already on the NAS and are not copied here --
+# this covers only the metadata: tags, correspondents, document types, saved
+# views, users and the OCR content index.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: paperless-backups
+spec:
+  capacity: {storage: 20Gi}
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [vers=3, hard, noatime]
+  nfs:
+    server: 10.70.20.101
+    path: /volume/75b8b525-ccff-4d03-bca0-8bfbb76b8e03/.srv/.unifi-drive/Documents/.data/k8s-backups/paperless
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: paperless-backups, namespace: paperless}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: paperless-backups
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: paperless-postgres-backup, namespace: paperless}
+spec:
+  # Every 2 days at 03:45 -- offset from Immich's 03:15 so the two dumps never
+  # hit the NAS at the same time.
+  schedule: "45 3 */2 * *"
+  timeZone: America/Vancouver
+  concurrencyPolicy: Forbid       # never overlap a long dump with the next one
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              # Same image as the server, so pg_dump matches the server version.
+              image: postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              env:
+                - {name: PGHOST, value: paperless-postgres}
+                - {name: PGUSER, value: paperless}
+                - {name: PGDATABASE, value: paperlessdb}
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: paperless-secret, key: PAPERLESS_DBPASS}}
+                # ~1 month of history. At one dump every 2 days that is ~16 files.
+                - {name: RETAIN_DAYS, value: "32"}
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  set -eu
+                  ts="$(date +%Y%m%d-%H%M)"
+                  out="/backup/paperless-${ts}.sql.gz"
+                  echo "dumping to $out"
+                  # --clean --if-exists so the dump can restore over an existing db.
+                  pg_dump --clean --if-exists --no-owner --no-acl | gzip -c > "$out.partial"
+                  # Only publish under the final name once the dump completed, so a
+                  # failed or truncated run can never masquerade as a good backup.
+                  mv "$out.partial" "$out"
+                  echo "wrote $(du -h "$out" | cut -f1)"
+                  echo "pruning backups older than ${RETAIN_DAYS} days"
+                  find /backup -name 'paperless-*.sql.gz' -type f -mtime +${RETAIN_DAYS} -print -delete || true
+                  # Clean up any stale partials from previous crashed runs.
+                  find /backup -name '*.partial' -type f -mtime +1 -print -delete || true
+                  echo "current backups:"
+                  ls -lh /backup | tail -n +2 | awk '{print "  "$9, $5}'
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+              resources:
+                requests: {cpu: 100m, memory: 256Mi}
+                limits: {memory: 1Gi}
+          volumes:
+            - {name: backup, persistentVolumeClaim: {claimName: paperless-backups}}

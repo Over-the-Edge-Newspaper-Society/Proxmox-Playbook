@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventscrape-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eventscrape-admin
+  template:
+    metadata:
+      labels:
+        app: eventscrape-admin
+    spec:
+      containers:
+        - name: admin
+          # Replaced by the overlay. The image has VITE_CONVEX_URL baked in at
+          # build time, so rebuild it if the public Convex hostname changes.
+          image: docker.io/eventscrape-local/admin:placeholder
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NODE_ENV
+              value: production
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eventscrape-admin
+spec:
+  selector:
+    app: eventscrape-admin
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

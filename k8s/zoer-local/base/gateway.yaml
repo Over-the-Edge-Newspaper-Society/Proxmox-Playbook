@@ -1,0 +1,275 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zoer-nginx-config
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+      }
+
+      # TLS terminates at Traefik, so nginx itself always sees HTTP. Preserve
+      # Traefik's protocol header when it is a recognized value, with a safe
+      # fallback for direct or malformed requests.
+      map $http_x_forwarded_proto $upstream_forwarded_proto {
+        default $scheme;
+        ~*^http$ http;
+        ~*^https$ https;
+      }
+
+      upstream frontend {
+        server zoer-frontend:3000;
+      }
+
+      upstream backend {
+        server zoer-backend:4000;
+      }
+
+      upstream blitz-dashboard {
+        server zoer-blitz-dashboard:3000;
+      }
+
+      upstream blitz-engine {
+        server zoer-blitzbrowser:9999;
+      }
+
+      # Each local WordPress site gets its own browser origin. The backend
+      # resolves the first label to a managed DDEV or Playground computer and
+      # proxies WordPress at the origin root, including wp-admin and REST.
+      server {
+        listen 80;
+        server_name "~^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.wp\.k8s\.ahmad\.sh$";
+        client_max_body_size 50m;
+
+        location / {
+          proxy_pass http://backend;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Host $host;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+          proxy_buffering off;
+        }
+      }
+
+      # Published services use the same origin-root proxy contract as a
+      # conventional deployment platform. The Sites registry resolves the
+      # hostname to the selected computer and listening port.
+      server {
+        listen 80;
+        server_name "~^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.sites\.k8s\.ahmad\.sh$";
+        client_max_body_size 50m;
+
+        location / {
+          proxy_pass http://backend;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Host $host;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+          proxy_buffering off;
+        }
+      }
+
+      server {
+        listen 80 default_server;
+        server_name _;
+        client_max_body_size 50m;
+
+        location /api/ {
+          proxy_pass http://backend;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+          proxy_buffering off;
+        }
+
+        location /sites/ {
+          proxy_pass http://backend;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+        }
+
+        # Blitz Dashboard - per-computer browser live view + management UI.
+        # Reverse-proxied here (same-origin) so Zoer's BrowserPanel can iframe it.
+        location /blitz-dashboard/ {
+          proxy_pass http://blitz-dashboard/;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          # Strip frame-blocking headers if the upstream sets them, so the
+          # dashboard can be embedded in Zoer's same-origin iframe.
+          proxy_hide_header X-Frame-Options;
+          proxy_hide_header Content-Security-Policy;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+          proxy_buffering off;
+        }
+
+        # Direct path to Blitz engine for live-view WebSockets / browser-pool API.
+        # Allows the dashboard's noVNC client to reach /browser-instances/<id>/vnc
+        # through the same origin as Zoer.
+        location /blitz-engine/ {
+          proxy_pass http://blitz-engine/;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+          proxy_buffering off;
+        }
+
+        location / {
+          proxy_pass http://frontend;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $upstream_forwarded_proto;
+          # Override the frontend SPA's CSP so the BrowserPanel iframe to
+          # blitz-dashboard.k8s.{home,ahmad.sh} is allowed at the gateway
+          # tier. This is the canonical CSP for the user-facing origin and
+          # keeps allowlisting in one place (here) instead of also in the
+          # frontend image.
+          proxy_hide_header Content-Security-Policy;
+          add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://github.com https://avatars.githubusercontent.com; connect-src 'self' ws: wss: http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca; frame-src 'self' http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote https://*.k8s.overtheedgepaper.ca;" always;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-gateway
+  template:
+    metadata:
+      labels:
+        app: zoer-gateway
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: zoer-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-gateway
+spec:
+  type: NodePort
+  selector:
+    app: zoer-gateway
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-ingress
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: zoer.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-gateway
+                port:
+                  number: 80
+---
+# Trusted-HTTPS twin of zoer-ingress. Uses Traefik's default certificate
+# (the *.k8s.overtheedgepaper.ca wildcard issued by cert-manager via the
+# letsencrypt-cloudflare ClusterIssuer) so https://zoer.k8s.overtheedgepaper.ca
+# Just Works without per-ingress TLS config — same pattern as
+# k8s/romm/ingress.yaml's romm-https.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: k8s-overtheedgepaper-tls
+      hosts:
+        - zoer.k8s.overtheedgepaper.ca
+  rules:
+    - host: zoer.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-gateway
+                port:
+                  number: 80

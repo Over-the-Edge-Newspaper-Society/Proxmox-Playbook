@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otemanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otemanager
+  template:
+    metadata:
+      labels:
+        app: otemanager
+    spec:
+      containers:
+        - name: app
+          # Replaced by the overlay with the tag built on the node.
+          image: docker.io/otemanager-local/app:placeholder
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            # In-cluster Convex. The app reaches it through a server-only
+            # bridge; the secret never reaches the browser.
+            - name: CONVEX_URL
+              value: http://otemanager-convex:3210
+            - name: MAX_FILE_SIZE
+              value: "52428800"      # 50 MiB
+            - name: MAX_BACKUP_SIZE
+              value: "5368709120"    # 5 GiB
+          envFrom:
+            # Supplies CONVEX_SERVER_SECRET. The SAME value must also be set
+            # inside the Convex deployment's own environment, or every call is
+            # rejected. See scripts/otemanager-bootstrap.sh.
+            - secretRef:
+                name: otemanager-app-secret
+          volumeMounts:
+            # Backup import/export streams multi-GB archives through TMPDIR.
+            # emptyDir keeps that off the container filesystem.
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otemanager
+spec:
+  selector:
+    app: otemanager
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

@@ -1,0 +1,72 @@
+# Admin SPA over plain HTTP on the internal-only suffix.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eventscrape-admin-ingress
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: events.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eventscrape-admin
+                port:
+                  number: 80
+---
+# Admin SPA over HTTPS.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eventscrape-admin-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: eventscrape-tls
+      hosts:
+        - events.k8s.overtheedgepaper.ca
+  rules:
+    - host: events.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eventscrape-admin
+                port:
+                  number: 80
+---
+# Convex backend, exposed because the admin SPA calls it FROM THE BROWSER.
+# This URL is baked into the admin bundle at build time (VITE_CONVEX_URL) and
+# is also what Convex uses to mint file URLs, so it must match exactly.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eventscrape-convex-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: eventscrape-tls
+      hosts:
+        - convex-events.k8s.overtheedgepaper.ca
+  rules:
+    - host: convex-events.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eventscrape-convex
+                port:
+                  number: 3210

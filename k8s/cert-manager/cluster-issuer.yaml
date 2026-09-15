@@ -1,0 +1,24 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-cloudflare
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # No contact email registered. Let's Encrypt will not send expiry warnings;
+    # cert-manager renews automatically at ~2/3 of lifetime regardless.
+    # Add `email:` here if you want those notices.
+    privateKeySecretRef:
+      name: letsencrypt-cloudflare-account-key
+    solvers:
+      # DNS-01 works for hosts that are not publicly reachable, which is why it
+      # suits an internal-only cluster. It proves control of the DOMAIN, not the
+      # host, by writing a TXT record via the Cloudflare API.
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - overtheedgepaper.ca

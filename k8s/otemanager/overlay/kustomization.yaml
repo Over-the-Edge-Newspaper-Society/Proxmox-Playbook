@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: otemanager
+
+resources:
+  - ../base
+
+# Point at the image built on the node by scripts/otemanager-local-build.sh.
+# imagePullPolicy is IfNotPresent in the base, so kubelet uses the imported
+# image and never contacts a registry.
+images:
+  - name: docker.io/otemanager-local/app
+    newTag: dev-1789395915-c8492df-dirty

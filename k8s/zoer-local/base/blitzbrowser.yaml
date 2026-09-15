@@ -1,0 +1,247 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zoer-blitzbrowser-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: nfs-nas
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-blitzbrowser
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-blitzbrowser
+  template:
+    metadata:
+      labels:
+        app: zoer-blitzbrowser
+    spec:
+      containers:
+        - name: blitzbrowser
+          # Archived upstream image pinned for existing-profile migration only.
+          image: ghcr.io/blitzbrowser/blitzbrowser@sha256:e55df2057ad9087931a6871e3b8aac9a5ad24cac267b710cc6029812eb456087
+          imagePullPolicy: IfNotPresent
+          # SYS_ADMIN lets Chrome's namespaced sandbox start cleanly
+          # (matches the docker-compose `cap_add: SYS_ADMIN` from societyer's
+          # blitzbrowser service). Without it Chrome falls back to no-sandbox,
+          # which still works but is noisier in logs and slower at startup.
+          securityContext:
+            capabilities:
+              add:
+                - SYS_ADMIN
+          ports:
+            - containerPort: 9999
+              name: cdp
+          env:
+            - name: PORT
+              value: "9999"
+            - name: MAX_BROWSER_INSTANCES
+              value: "8"
+          volumeMounts:
+            - name: user-data
+              mountPath: /blitzbrowser/user-data
+            - name: dshm
+              mountPath: /dev/shm
+          readinessProbe:
+            tcpSocket:
+              port: 9999
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 4Gi
+      volumes:
+        - name: user-data
+          persistentVolumeClaim:
+            claimName: zoer-blitzbrowser-data
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-blitzbrowser
+spec:
+  selector:
+    app: zoer-blitzbrowser
+  ports:
+    - port: 9999
+      targetPort: 9999
+      name: cdp
+---
+# Ingress so browsers OUTSIDE the cluster can reach the Blitz engine for
+# /browser-pool (HTTP) and /browser-instances + /browser-instances/<id>/vnc
+# (WebSocket). Required because the dashboard SPA, when iframed in Zoer,
+# runs in the user's browser and shipped this hostname as its API target.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-blitz-engine-ingress
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: blitz-engine.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-blitzbrowser
+                port:
+                  number: 9999
+---
+# Trusted-HTTPS twin of the engine ingress so https://zoer.k8s.overtheedgepaper.ca
+# can iframe a same-scheme dashboard without mixed-content errors.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-blitz-engine-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: k8s-overtheedgepaper-tls
+      hosts:
+        - blitz-engine.k8s.overtheedgepaper.ca
+  rules:
+    - host: blitz-engine.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-blitzbrowser
+                port:
+                  number: 9999
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-blitz-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-blitz-dashboard
+  template:
+    metadata:
+      labels:
+        app: zoer-blitz-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/blitzbrowser/dashboard:1.6.0@sha256:8164114da60a3ade83defa58eaac478d575b645bca4ed6b8a876963a284b6133
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            # The dashboard SPA ships this URL to the user's browser, which then
+            # opens a WebSocket to <host>/browser-instances. The cluster-internal
+            # Service DNS won't resolve from a browser outside the cluster, so
+            # we use the trusted-HTTPS ingress hostname so the dashboard works
+            # from both http://zoer.k8s.ote and https://zoer.k8s.overtheedgepaper.ca
+            # without mixed-content errors.
+            - name: BLITZBROWSER_API_URL
+              value: https://blitz-engine.k8s.overtheedgepaper.ca/
+            - name: HTTPS_DISABLED
+              value: "true"
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
+            limits:
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-blitz-dashboard
+spec:
+  selector:
+    app: zoer-blitz-dashboard
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+---
+# Dedicated hostname for the dashboard. Required because the SvelteKit
+# bundle hardcodes absolute paths like fetch("/api"), which under a path
+# prefix (/blitz-dashboard/) resolve to Zoer's own /api/ — landing on the
+# Zoer backend and 404'ing. Giving the dashboard its own root hostname
+# lets those absolute paths resolve correctly.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-blitz-dashboard-ingress
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: blitz-dashboard.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-blitz-dashboard
+                port:
+                  number: 3000
+---
+# Trusted-HTTPS twin so the BrowserPanel iframe can stay same-scheme
+# when Zoer is loaded over https://zoer.k8s.overtheedgepaper.ca.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-blitz-dashboard-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: k8s-overtheedgepaper-tls
+      hosts:
+        - blitz-dashboard.k8s.overtheedgepaper.ca
+  rules:
+    - host: blitz-dashboard.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-blitz-dashboard
+                port:
+                  number: 3000

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zoer
+
+resources:
+  - ../base
+
+# Swap the GHCR images for the ones built on the node and imported into k3s
+# containerd. imagePullPolicy is already IfNotPresent in the base, so kubelet
+# uses the local image and never contacts a registry.
+images:
+  - name: ghcr.io/ahzs645/zoer/backend
+    newName: docker.io/zoer-local/backend
+    newTag: dev-1789493208-7e9d6f2-dirty
+  - name: ghcr.io/ahzs645/zoer/frontend
+    newName: docker.io/zoer-local/frontend
+    newTag: dev-1789493208-7e9d6f2-dirty

@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-frontend
+  template:
+    metadata:
+      labels:
+        app: zoer-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/ahzs645/zoer/frontend:main-1786607845-0051036 # {"$imagepolicy": "flux-system:zoer-frontend"}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: API_UPSTREAM
+              value: zoer-backend:4000
+            # The frontend nginx serves the SPA HTML and stamps a CSP on it.
+            # Same wildcards as the backend's CSP_FRAME_SRC_EXTRA so iframes
+            # to the BlitzBrowser dashboard work over both *.k8s.ote (HTTP)
+            # and *.k8s.overtheedgepaper.ca (HTTPS). nginx-image envsubst expands these
+            # into the response header at container start.
+            - name: CSP_FRAME_SRC_EXTRA
+              value: http://blitz-dashboard.k8s.ote http://*.k8s.ote https://*.k8s.overtheedgepaper.ca
+            - name: CSP_CONNECT_SRC_EXTRA
+              value: http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
+            limits:
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-frontend
+spec:
+  selector:
+    app: zoer-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000

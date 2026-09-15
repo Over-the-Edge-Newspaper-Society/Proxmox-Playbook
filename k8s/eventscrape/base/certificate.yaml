@@ -1,0 +1,14 @@
+# One certificate covering both public hostnames. TLS Secrets are
+# namespace-scoped, so the zoer/otemanager certs cannot be reused here.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: eventscrape-tls
+spec:
+  secretName: eventscrape-tls
+  issuerRef:
+    name: letsencrypt-cloudflare
+    kind: ClusterIssuer
+  dnsNames:
+    - events.k8s.overtheedgepaper.ca
+    - convex-events.k8s.overtheedgepaper.ca

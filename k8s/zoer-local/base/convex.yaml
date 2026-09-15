@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-convex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-convex
+  template:
+    metadata:
+      labels:
+        app: zoer-convex
+    spec:
+      containers:
+        - name: convex
+          image: ghcr.io/get-convex/convex-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3210
+              name: convex-api
+            - containerPort: 3211
+              name: convex-site
+          env:
+            - name: CONVEX_AGENT_MODE
+              value: "anonymous"
+          volumeMounts:
+            - name: convex-data
+              mountPath: /convex/data
+          readinessProbe:
+            tcpSocket:
+              port: 3211
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              memory: 3Gi
+              ephemeral-storage: 4Gi
+      volumes:
+        - name: convex-data
+          persistentVolumeClaim:
+            claimName: zoer-convex-data-local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-convex
+spec:
+  selector:
+    app: zoer-convex
+  ports:
+    - name: convex-api
+      port: 3210
+      targetPort: 3210
+    - name: convex-site
+      port: 3211
+      targetPort: 3211

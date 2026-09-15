@@ -1,0 +1,76 @@
+# Proxmox VE web UI, fronted by Traefik.
+#
+# The hypervisor is NOT in the cluster, so there is no pod to select. A Service
+# with no selector plus a hand-written EndpointSlice is the supported way to
+# name an off-cluster address: Traefik resolves the Service normally and lands
+# on 10.70.20.10:8006.
+#
+# BREAK-GLASS: Traefik runs in VM 210, which runs ON this hypervisor. If the
+# node is down, this name is down with it. https://10.70.20.10:8006 always
+# works and does not depend on the cluster -- keep it bookmarked.
+apiVersion: v1
+kind: Service
+metadata: {name: proxmox, namespace: infra}
+spec:
+  type: ClusterIP
+  ports:
+    - {name: https, port: 8006, targetPort: 8006, protocol: TCP}
+---
+# Legacy Endpoints, NOT EndpointSlice, on purpose. k3s ships Traefik 2.11 here
+# and the v2 Kubernetes provider only reads core/v1 Endpoints -- it ignores
+# discovery.k8s.io EndpointSlice entirely and logs "endpoints not found", which
+# drops the router and answers 404. EndpointSlice support arrived in Traefik v3.
+# The mirroring controller copies this into a slice automatically, so a future
+# Traefik v3 upgrade needs no change here.
+apiVersion: v1
+kind: Endpoints
+metadata: {name: proxmox, namespace: infra}
+subsets:
+  - addresses: [{ip: 10.70.20.10}]
+    ports: [{name: https, port: 8006, protocol: TCP}]
+---
+# Proxmox serves its own self-signed certificate on 8006 and there is no way to
+# make it present a trusted one without replacing the cluster's own certs. This
+# transport tells Traefik to skip verification on that HOP ONLY -- the browser
+# still gets the real Let's Encrypt certificate from Traefik.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata: {name: insecure-backend, namespace: infra}
+spec:
+  insecureSkipVerify: true
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: proxmox-tls, namespace: infra}
+spec:
+  secretName: proxmox-tls
+  issuerRef: {name: letsencrypt-cloudflare, kind: ClusterIssuer}
+  dnsNames: [proxmox.k8s.overtheedgepaper.ca]
+---
+# An IngressRoute, not an Ingress, ON PURPOSE.
+#
+# Proxmox serves a self-signed cert on 8006, so Traefik must be told to skip
+# verification for that hop. With a plain Ingress the documented annotation
+# (traefik.ingress.kubernetes.io/service.serverstransport) is SILENTLY IGNORED
+# by Traefik 2.11 -- its API showed serversTransport: None and every request
+# returned 500. The CRD takes serversTransport as a real field, which works.
+#
+# HTTPS only, deliberately. Every other app here also answers on a plain-HTTP
+# .k8s.ote name, but this is the hypervisor root login -- it should not be
+# reachable in cleartext when a TLS name is available.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: {name: proxmox, namespace: infra}
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`proxmox.k8s.overtheedgepaper.ca`)
+      services:
+        - name: proxmox
+          port: 8006
+          scheme: https                    # Proxmox only speaks TLS on 8006
+          serversTransport: insecure-backend
+          passHostHeader: true
+  tls:
+    secretName: proxmox-tls

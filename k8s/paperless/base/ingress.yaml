@@ -1,0 +1,33 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: paperless-tls, namespace: paperless}
+spec:
+  secretName: paperless-tls
+  issuerRef: {name: letsencrypt-cloudflare, kind: ClusterIssuer}
+  dnsNames: [paperless.k8s.overtheedgepaper.ca]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: paperless-ingress, namespace: paperless}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: paperless.k8s.ote
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: paperless, port: {number: 8000}}}}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: paperless-ingress-https
+  namespace: paperless
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls: [{secretName: paperless-tls, hosts: [paperless.k8s.overtheedgepaper.ca]}]
+  rules:
+    - host: paperless.k8s.overtheedgepaper.ca
+      http:
+        paths: [{path: /, pathType: Prefix, backend: {service: {name: paperless, port: {number: 8000}}}}]

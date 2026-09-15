@@ -1,0 +1,75 @@
+# PostgreSQL 16 with VectorChord.
+#
+# The official Immich v3 compose ships PostgreSQL *14*. That will not work here:
+# the existing database in CT 100 is PostgreSQL 16, and a PG16 dump cannot be
+# restored into PG14. This image matches the source exactly on the extension
+# that matters (vchord 0.4.3) and is PG16.
+#
+# Storage is local-path, NOT NFS: Postgres over NFS invites locking problems and
+# corruption. It is only ~245 MB. Durability comes from the backup CronJob,
+# which writes dumps to the NAS.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-postgres-data
+  namespace: immich
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: immich-postgres
+  namespace: immich
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single writer on a RWO volume
+  selector:
+    matchLabels: {app: immich-postgres}
+  template:
+    metadata:
+      labels: {app: immich-postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: ghcr.io/immich-app/postgres:16-vectorchord0.4.3-pgvector0.8.0
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 5432, name: postgres}]
+          env:
+            # Must match the source database: role `immich` owns database `immich`.
+            - name: POSTGRES_USER
+              value: immich
+            - name: POSTGRES_DB
+              value: immich
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: immich-secret, key: DB_PASSWORD}}
+            - name: POSTGRES_INITDB_ARGS
+              value: '--data-checksums'
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: dshm, mountPath: /dev/shm}
+          readinessProbe:
+            exec: {command: ["sh","-c","pg_isready -U immich -d immich"]}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 8
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {memory: 2Gi}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: immich-postgres-data}}
+        - {name: dshm, emptyDir: {medium: Memory, sizeLimit: 512Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: immich-postgres, namespace: immich}
+spec:
+  selector: {app: immich-postgres}
+  ports: [{name: postgres, port: 5432, targetPort: 5432}]

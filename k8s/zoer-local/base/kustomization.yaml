@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: zoer
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - storage.yaml
+  - job-store-postgres.yaml
+  - plugin-runner-network-policy.yaml
+  - convex.yaml
+  - cloakbrowser.yaml
+  - blitzbrowser.yaml
+  - backend.yaml
+  - frontend.yaml
+  - gateway.yaml
+
+# wordpress-domains.yaml / sites-domains.yaml are intentionally excluded:
+# each declares a cert-manager Certificate for a public *.k8s.overtheedgepaper.ca domain,
+# and cert-manager is not installed on this cluster. The local ingress
+# (zoer.k8s.ote) lives in gateway.yaml and is unaffected.

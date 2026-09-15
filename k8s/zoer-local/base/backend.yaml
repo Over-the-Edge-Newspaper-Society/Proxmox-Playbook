@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-backend
+  template:
+    metadata:
+      labels:
+        app: zoer-backend
+    spec:
+      serviceAccountName: zoer-backend
+      containers:
+        - name: backend
+          image: ghcr.io/ahzs645/zoer/backend:main-1786607845-0051036 # {"$imagepolicy": "flux-system:zoer-backend"}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4000
+          env:
+            - name: NODE_ENV
+              value: development
+            - name: PORT
+              value: "4000"
+            - name: TZ
+              value: America/Vancouver
+            - name: LOG_LEVEL
+              value: info
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=4096
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - name: AI_BASE_URL
+              value: http://192.168.1.51:11434/v1
+            - name: AI_MODEL
+              value: qwen3.5:9b
+            - name: COMPUTER_ORCHESTRATOR
+              value: k8s
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: K8S_COMPUTER_IMAGE
+              value: ghcr.io/ahzs645/zoer/computer:main-1786604169-12a554e-full # {"$imagepolicy": "flux-system:zoer-computer"}
+            - name: K8S_IMAGE_PULL_POLICY
+              value: IfNotPresent
+            - name: PLUGIN_RUNNER_MODE
+              value: kubernetes
+            - name: PLUGIN_RUNNER_CONTAINER_IMAGE
+              value: ghcr.io/ahzs645/zoer/backend:main-1786607845-0051036 # {"$imagepolicy": "flux-system:zoer-backend"}
+            - name: PLUGIN_RUNNER_DATA_PVC
+              value: zoer-backend-data
+            - name: K8S_SERVICE_TYPE
+              value: NodePort
+            - name: K8S_WORKSPACE_STORAGE_CLASS
+              value: nfs-nas
+            - name: K8S_SHARED_WORKSPACE_STORAGE_CLASS
+              value: nfs-nas
+            - name: CONVEX_SELF_HOSTED_URL
+              value: http://zoer-convex:3210
+            - name: CORS_ORIGIN
+              value: http://zoer.k8s.ote,https://zoer.k8s.overtheedgepaper.ca,https://wp.k8s.overtheedgepaper.ca,https://sites.k8s.overtheedgepaper.ca
+            - name: WORDPRESS_MANAGER_DOMAIN
+              value: wp.k8s.overtheedgepaper.ca
+            - name: SITES_MANAGER_DOMAIN
+              value: sites.k8s.overtheedgepaper.ca
+            - name: DDEV_BRIDGE_URL
+              value: http://10.70.20.50:4085
+            # Development mode: open access, no login. Paired with
+            # DEV_ALLOW_PASSWORDLESS_GITHUB below, anyone who can reach this
+            # instance has full workspace + GitHub account access.
+            - name: AUTH_PASSWORD_ENABLED
+              value: "0"
+            - name: AUTH_DEMO_ENABLED
+              value: "0"
+            # GitHub account operations are refused outright in passwordless
+            # mode unless this is exactly "1" (see backend/src/repo-providers.ts).
+            - name: DEV_ALLOW_PASSWORDLESS_GITHUB
+              value: "1"
+            # --- CloakBrowser Manager (default external backend when configured) ---
+            - name: CLOAK_BROWSER_MANAGER_URL
+              value: http://zoer-cloakbrowser:8080
+            - name: CLOAK_BROWSER_PUBLIC_URL
+              value: https://cloak-browser.k8s.overtheedgepaper.ca/
+            # --- BlitzBrowser (fallback external backend for shared browser sessions) ---
+            - name: BLITZ_BROWSER_CDP_URL
+              value: ws://zoer-blitzbrowser:9999
+            - name: BLITZ_BROWSER_LIVE_VIEW
+              value: "1"
+            - name: BLITZ_BROWSER_STORAGE_BACKEND
+              value: local
+            - name: BLITZ_BROWSER_DASHBOARD_URL
+              value: https://blitz-dashboard.k8s.overtheedgepaper.ca/
+            # CSP allowlist for the BrowserPanel iframe + dashboard's outbound
+            # WebSocket / fetches. Wildcards cover both *.k8s.ote (plain HTTP)
+            # and *.k8s.overtheedgepaper.ca (the wildcard-TLS hostnames used by other
+            # homelab services like romm/retrom/tcger).
+            - name: CSP_FRAME_SRC_EXTRA
+              value: http://blitz-dashboard.k8s.ote http://*.k8s.ote https://*.k8s.overtheedgepaper.ca
+            - name: CSP_CONNECT_SRC_EXTRA
+              value: http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca
+          envFrom:
+            - secretRef:
+                name: zoer-app-secret
+            - secretRef:
+                name: zoer-ddev-bridge
+          volumeMounts:
+            - name: backend-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              memory: 2Gi
+              ephemeral-storage: 4Gi
+      volumes:
+        - name: backend-data
+          persistentVolumeClaim:
+            claimName: zoer-backend-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-backend
+spec:
+  selector:
+    app: zoer-backend
+  ports:
+    - port: 4000
+      targetPort: 4000

@@ -1,0 +1,14 @@
+# A TLS secret is namespace-scoped, so the zoer namespace's wildcard cannot be
+# reused here. cert-manager issues a second certificate from the same
+# ClusterIssuer; Let's Encrypt rate limits are per-domain and generous.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otemanager-tls
+spec:
+  secretName: otemanager-tls
+  issuerRef:
+    name: letsencrypt-cloudflare
+    kind: ClusterIssuer
+  dnsNames:
+    - otemanager.k8s.overtheedgepaper.ca

@@ -1,0 +1,16 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: k8s-overtheedgepaper-wildcard
+  namespace: zoer
+spec:
+  secretName: k8s-overtheedgepaper-tls
+  issuerRef:
+    name: letsencrypt-cloudflare
+    kind: ClusterIssuer
+  # A TLS wildcard matches exactly one label, so *.k8s.overtheedgepaper.ca
+  # covers zoer.k8s... but NOT a.b.k8s... The bare name is listed separately
+  # because a wildcard does not match the domain it is rooted at.
+  dnsNames:
+    - "k8s.overtheedgepaper.ca"
+    - "*.k8s.overtheedgepaper.ca"

@@ -1,0 +1,96 @@
+# Tika and Gotenberg are STATELESS document converters - Paperless POSTs a file
+# and gets converted output back. No database, no volumes, nothing to migrate.
+# They lived in CT 104 (10.70.20.160:9998) and CT 105 (10.70.20.138:3000);
+# here they are just two deployments and the endpoints become Service names.
+#
+# Gotenberg was on v7 in CT 105; v8 is current.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paperless-gotenberg, namespace: paperless}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: paperless-gotenberg}}
+  template:
+    metadata: {labels: {app: paperless-gotenberg}}
+    spec:
+      containers:
+        - name: gotenberg
+          image: docker.io/gotenberg/gotenberg:8
+          imagePullPolicy: IfNotPresent
+          # Paperless' recommended flags: it does not use these routes, and
+          # disabling them reduces the exposed surface.
+          args: ["gotenberg","--chromium-disable-javascript=true","--chromium-allow-list=file:///tmp/.*"]
+          ports: [{containerPort: 3000}]
+          readinessProbe:
+            httpGet: {path: /health, port: 3000}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paperless-gotenberg, namespace: paperless}
+spec:
+  selector: {app: paperless-gotenberg}
+  ports: [{port: 3000, targetPort: 3000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paperless-tika, namespace: paperless}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: paperless-tika}}
+  template:
+    metadata: {labels: {app: paperless-tika}}
+    spec:
+      containers:
+        - name: tika
+          image: docker.io/apache/tika:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 9998}]
+          readinessProbe:
+            httpGet: {path: /version, port: 9998}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paperless-tika, namespace: paperless}
+spec:
+  selector: {app: paperless-tika}
+  ports: [{port: 9998, targetPort: 9998}]
+---
+# Valkey replaces the Redis that ran inside CT 102. Holds the task queue only.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: paperless-valkey, namespace: paperless}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: paperless-valkey}}
+  template:
+    metadata: {labels: {app: paperless-valkey}}
+    spec:
+      containers:
+        - name: valkey
+          image: docker.io/valkey/valkey:9
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 6379}]
+          readinessProbe:
+            exec: {command: ["sh","-c","valkey-cli ping | grep -q PONG"]}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: paperless-valkey, namespace: paperless}
+spec:
+  selector: {app: paperless-valkey}
+  ports: [{port: 6379, targetPort: 6379}]

@@ -1,0 +1,45 @@
+# Nginx Proxy Manager is retired: the bare Immich.overtheedgepaper.ca name is
+# gone and .k8s.overtheedgepaper.ca is the only public name. The Immich MOBILE
+# APP stores the server URL per device, so every client had to be re-pointed.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: {name: immich-tls, namespace: immich}
+spec:
+  secretName: immich-tls
+  issuerRef: {name: letsencrypt-cloudflare, kind: ClusterIssuer}
+  dnsNames:
+    - immich.k8s.overtheedgepaper.ca
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: immich-ingress, namespace: immich}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: immich.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: immich-server, port: {number: 2283}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: immich-ingress-https
+  namespace: immich
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: immich-tls
+      hosts: [immich.k8s.overtheedgepaper.ca]
+  rules:
+    - host: immich.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: immich-server, port: {number: 2283}}}

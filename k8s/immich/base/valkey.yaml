@@ -1,0 +1,30 @@
+# Valkey replaces Redis in Immich v3's reference compose. Ephemeral by design -
+# it holds the job queue, which Immich rebuilds if lost.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: immich-valkey, namespace: immich}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: immich-valkey}}
+  template:
+    metadata: {labels: {app: immich-valkey}}
+    spec:
+      containers:
+        - name: valkey
+          image: docker.io/valkey/valkey:9
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 6379, name: redis}]
+          readinessProbe:
+            exec: {command: ["sh","-c","valkey-cli ping | grep -q PONG"]}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: immich-valkey, namespace: immich}
+spec:
+  selector: {app: immich-valkey}
+  ports: [{name: redis, port: 6379, targetPort: 6379}]

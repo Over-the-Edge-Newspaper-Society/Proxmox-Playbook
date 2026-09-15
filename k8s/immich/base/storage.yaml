@@ -1,0 +1,50 @@
+# Immich's 123 GB library ALREADY EXISTS on the NAS at Images/.data/immich - the
+# LXC reached it via a Proxmox bind mount. We mount it directly from the node
+# now that 10.70.20.50 is on the UNAS allow-list; no data is copied or moved.
+#
+# This is a STATIC PersistentVolume, not a dynamic StorageClass: dynamic
+# provisioning would create a NEW empty subdirectory, which is the opposite of
+# what we want for pre-existing data.
+#
+# readOnly is deliberate for the first boot. The old Immich in CT 100 is still
+# running against these same files; read-only makes it impossible for the new
+# version to modify them while we verify it. Flip to read-write only after
+# CT 100's Immich is stopped.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-library
+spec:
+  capacity:
+    storage: 500Gi          # informational for NFS; the share has ~14 TB free
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain   # NEVER delete the library on PVC removal
+  storageClassName: ""      # "" prevents any dynamic provisioner from touching it
+  mountOptions:
+    - vers=3
+    - hard                  # block during a NAS hiccup rather than erroring
+    - noatime
+    # NOTE: `ro` was used during migration to keep the new version off the live
+    # library while CT 100 was still serving. Immich v3 CANNOT start read-only -
+    # it writes a .immich marker into each media folder as an integrity check
+    # (EROFS: read-only file system). CT 100's immich-web/immich-ml are stopped,
+    # so this instance now has exclusive write access.
+  nfs:
+    server: 10.70.20.101
+    # The media ROOT is the data/ subdirectory - it holds library/, upload/,
+    # thumbs/, encoded-video/, profile/ and backups/. The parent also contains a
+    # stray 49 GB 'incoming/upload (1)' tree that is NOT the live library.
+    path: /volume/75b8b525-ccff-4d03-bca0-8bfbb76b8e03/.srv/.unifi-drive/Images/.data/immich/data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-library
+  namespace: immich
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: immich-library
+  resources:
+    requests:
+      storage: 500Gi

@@ -1,0 +1,106 @@
+# Self-hosted Convex backend — the whole EventScrape dataset lives here:
+# db.sqlite3 plus a storage/ tree (files, exports, modules, search).
+#
+# storageClassName is local-path, NOT the nfs-nas default. Convex uses SQLite,
+# which needs real filesystem locking; SQLite over NFS risks corruption. The
+# cost is that this data does not survive a node rebuild — back it up.
+#
+# The LXC deployment also supports offloading storage to MinIO via S3_* vars,
+# but those were left empty there (verified length=0), so storage is local.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eventscrape-convex-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 40Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventscrape-convex
+spec:
+  replicas: 1
+  strategy:
+    # SQLite on a RWO volume: never two instances against the same data.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: eventscrape-convex
+  template:
+    metadata:
+      labels:
+        app: eventscrape-convex
+    spec:
+      containers:
+        - name: convex
+          image: ghcr.io/get-convex/convex-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3210
+              name: convex-api
+            - containerPort: 3211
+              name: convex-site
+          env:
+            # Must match the migrated database's instance identity, or the
+            # backend will not open it. Taken from the LXC deployment.
+            - name: INSTANCE_NAME
+              value: eventscrape
+            - name: INSTANCE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: eventscrape-convex-secret
+                  key: INSTANCE_SECRET
+            # The admin SPA talks to Convex FROM THE BROWSER, so this must be
+            # the public URL, not the in-cluster Service name. It is also baked
+            # into the admin bundle at build time — the two must agree.
+            - name: CONVEX_CLOUD_ORIGIN
+              value: https://convex-events.k8s.overtheedgepaper.ca
+            - name: CONVEX_SITE_ORIGIN
+              value: https://convex-events.k8s.overtheedgepaper.ca
+            # TLS terminates at Traefik; the backend speaks plain HTTP inside.
+            - name: DO_NOT_REQUIRE_SSL
+              value: "true"
+            - name: DISABLE_BEACON
+              value: "true"
+            - name: REDACT_LOGS_TO_CLIENT
+              value: "true"
+          volumeMounts:
+            - name: convex-data
+              mountPath: /convex/data
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: 3210
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: convex-data
+          persistentVolumeClaim:
+            claimName: eventscrape-convex-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eventscrape-convex
+spec:
+  selector:
+    app: eventscrape-convex
+  ports:
+    - name: convex-api
+      port: 3210
+      targetPort: 3210
+    - name: convex-site
+      port: 3211
+      targetPort: 3211

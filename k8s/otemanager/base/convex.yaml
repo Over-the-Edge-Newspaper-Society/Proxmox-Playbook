@@ -1,0 +1,95 @@
+# Self-hosted Convex backend. Holds BOTH the article records and every uploaded
+# file — since the Convex migration there is no PostgreSQL and no S3/MinIO.
+#
+# Storage is deliberately `local-path`, NOT the nfs-nas default:
+# Convex stores its data in SQLite, which needs real filesystem locking. SQLite
+# over NFS is a known corruption risk. The cost is that this data lives on the
+# node's disk and does NOT survive a VM rebuild — so back it up (Utilities →
+# Backup & Restore, or scripts/otemanager-backup.sh).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: otemanager-convex-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 40Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otemanager-convex
+spec:
+  replicas: 1
+  strategy:
+    # SQLite on a RWO volume: never run two instances against the same data.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: otemanager-convex
+  template:
+    metadata:
+      labels:
+        app: otemanager-convex
+    spec:
+      containers:
+        - name: convex
+          image: ghcr.io/get-convex/convex-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3210
+              name: convex-api
+            - containerPort: 3211
+              name: convex-site
+          env:
+            - name: CONVEX_AGENT_MODE
+              value: "anonymous"
+            # Opt out of the self-host telemetry beacon.
+            - name: DISABLE_BEACON
+              value: "true"
+            # REQUIRED. These map to --convex-origin / --convex-site and tell the
+            # backend how clients reach it. Left unset, Convex hands out a
+            # RELATIVE upload URL ("/api/storage/upload?token=...") and every
+            # file upload dies with "Failed to parse URL". Records still import
+            # fine, so the failure looks like an app bug rather than config.
+            - name: CONVEX_CLOUD_ORIGIN
+              value: http://otemanager-convex:3210
+            - name: CONVEX_SITE_ORIGIN
+              value: http://otemanager-convex:3211
+          volumeMounts:
+            - name: convex-data
+              mountPath: /convex/data
+          readinessProbe:
+            tcpSocket:
+              port: 3211
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: convex-data
+          persistentVolumeClaim:
+            claimName: otemanager-convex-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otemanager-convex
+spec:
+  selector:
+    app: otemanager-convex
+  ports:
+    - name: convex-api
+      port: 3210
+      targetPort: 3210
+    - name: convex-site
+      port: 3211
+      targetPort: 3211

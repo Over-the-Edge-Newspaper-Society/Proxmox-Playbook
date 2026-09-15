@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zoer-cloakbrowser-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: nfs-nas
+  resources:
+    requests:
+      storage: 20Gi
+---
+# CloakBrowser's profile catalog is SQLite-backed and must use a filesystem
+# with working advisory locks. The NFS claim above remains as a migration
+# backup while this local volume is validated.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zoer-cloakbrowser-data-local
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-cloakbrowser
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoer-cloakbrowser
+  template:
+    metadata:
+      labels:
+        app: zoer-cloakbrowser
+    spec:
+      containers:
+        - name: cloakbrowser
+          # Pin the currently validated Manager release; newer Chromium builds
+          # require a Cloak account/key and should be promoted deliberately.
+          image: cloakhq/cloakbrowser-manager@sha256:eaa08b54f7d30f3512e1f8faa1e457fe340e868af9f76b5f6bad282b3bd7ae2d
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add:
+                - SYS_ADMIN
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TZ
+              value: America/Vancouver
+          volumeMounts:
+            - name: profiles
+              mountPath: /data
+            - name: dshm
+              mountPath: /dev/shm
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              memory: 6Gi
+      volumes:
+        - name: profiles
+          persistentVolumeClaim:
+            claimName: zoer-cloakbrowser-data-local
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-cloakbrowser
+spec:
+  selector:
+    app: zoer-cloakbrowser
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-cloakbrowser-ingress
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: cloak-browser.k8s.ote
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-cloakbrowser
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-cloakbrowser-ingress-https
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: k8s-overtheedgepaper-tls
+      hosts:
+        - cloak-browser.k8s.overtheedgepaper.ca
+  rules:
+    - host: cloak-browser.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-cloakbrowser
+                port:
+                  number: 8080

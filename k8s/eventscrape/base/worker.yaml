@@ -1,0 +1,54 @@
+# Scraper worker. Runs Playwright/Chromium headless, so it needs more memory
+# than the other services and a writable scratch directory.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventscrape-worker
+spec:
+  replicas: 1
+  strategy:
+    # Only one scraper should run at a time; two would double-write events.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: eventscrape-worker
+  template:
+    metadata:
+      labels:
+        app: eventscrape-worker
+    spec:
+      containers:
+        - name: worker
+          image: docker.io/eventscrape-local/worker:placeholder
+          imagePullPolicy: IfNotPresent
+          env:
+            # Internal Service address — the worker is server-side, so it does
+            # NOT need the public URL the browser uses.
+            - name: CONVEX_URL
+              value: http://eventscrape-convex:3210
+            - name: NODE_ENV
+              value: production
+            - name: PLAYWRIGHT_HEADLESS
+              value: "true"
+            - name: INSTAGRAM_IMAGES_DIR
+              value: /data/instagram_images
+          volumeMounts:
+            - name: scratch
+              mountPath: /data/instagram_images
+            # Chromium needs a real /dev/shm or it crashes on larger pages.
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi

@@ -1,0 +1,84 @@
+# Postgres backup to the NAS.
+#
+# The database lives on local-path (node disk) because Postgres over NFS risks
+# corruption - so it does NOT survive a node rebuild. These dumps are what makes
+# that acceptable: they land on the NAS, which is itself backed up.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-backups
+spec:
+  capacity: {storage: 50Gi}
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [vers=3, hard, noatime]
+  nfs:
+    server: 10.70.20.101
+    path: /volume/75b8b525-ccff-4d03-bca0-8bfbb76b8e03/.srv/.unifi-drive/Documents/.data/k8s-backups/immich
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: immich-backups, namespace: immich}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: immich-backups
+  resources: {requests: {storage: 50Gi}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: immich-postgres-backup, namespace: immich}
+spec:
+  # Every 2 days at 03:15. Immich's own jobs run overnight, so this avoids
+  # competing with them at exactly midnight.
+  schedule: "15 3 */2 * *"
+  timeZone: America/Vancouver
+  concurrencyPolicy: Forbid       # never overlap a long dump with the next one
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              # Same image as the server, so pg_dump matches the server version.
+              image: ghcr.io/immich-app/postgres:16-vectorchord0.4.3-pgvector0.8.0
+              imagePullPolicy: IfNotPresent
+              env:
+                - {name: PGHOST, value: immich-postgres}
+                - {name: PGUSER, value: immich}
+                - {name: PGDATABASE, value: immich}
+                - name: PGPASSWORD
+                  valueFrom: {secretKeyRef: {name: immich-secret, key: DB_PASSWORD}}
+                # ~1 month of history. At one dump every 2 days that is ~16 files.
+                - {name: RETAIN_DAYS, value: "32"}
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  set -eu
+                  ts="$(date +%Y%m%d-%H%M)"
+                  out="/backup/immich-${ts}.sql.gz"
+                  echo "dumping to $out"
+                  # --clean --if-exists so the dump can restore over an existing db.
+                  pg_dump --clean --if-exists --no-owner --no-acl | gzip -c > "$out.partial"
+                  # Only publish under the final name once the dump completed, so a
+                  # failed or truncated run can never masquerade as a good backup.
+                  mv "$out.partial" "$out"
+                  echo "wrote $(du -h "$out" | cut -f1)"
+                  echo "pruning backups older than ${RETAIN_DAYS} days"
+                  find /backup -name 'immich-*.sql.gz' -type f -mtime +${RETAIN_DAYS} -print -delete || true
+                  # Clean up any stale partials from previous crashed runs.
+                  find /backup -name '*.partial' -type f -mtime +1 -print -delete || true
+                  echo "current backups:"
+                  ls -lh /backup | tail -n +2 | awk '{print "  "$9, $5}'
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+              resources:
+                requests: {cpu: 100m, memory: 256Mi}
+                limits: {memory: 1Gi}
+          volumes:
+            - {name: backup, persistentVolumeClaim: {claimName: immich-backups}}
