@@ -16,6 +16,11 @@ key="${OTE_K8S_SSH_KEY:-$HOME/.ssh/personalprox_pve_ed25519}"
 [[ -d "$repo_root/.git" ]] || { echo "OTEManager repo not found at $repo_root (set OTE_REPO_ROOT)" >&2; exit 1; }
 [[ -f "$repo_root/Dockerfile" ]] || { echo "No Dockerfile at $repo_root" >&2; exit 1; }
 
+# Cap the build. An uncapped Vite build took 6.1 GB and drove the node to
+# 148 MB free with no swap -- load 61, every app down, API server unreachable.
+BUILD_MEM="${OTE_BUILD_MEM:-4g}"
+MIN_FREE_MB="${OTE_MIN_FREE_MB:-5000}"
+
 ssh_args=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i "$key" -o IdentitiesOnly=yes)
 remote() { ssh "${ssh_args[@]}" "$server_host" "$@"; }
 
@@ -27,6 +32,14 @@ image_tag="dev-$(date +%s)-$short_sha$dirty_suffix"
 image="docker.io/otemanager-local/app:$image_tag"
 echo "IMAGE_TAG=$image_tag"
 
+avail_mb="$(ssh "${ssh_args[@]}" "$server_host" "free -m | awk '/^Mem:/{print \$7}'" 2>/dev/null || echo 0)"
+echo "=== node memory available: ${avail_mb} MB (need >= ${MIN_FREE_MB} MB) ==="
+if [[ "${avail_mb:-0}" -lt "$MIN_FREE_MB" ]]; then
+  echo "!! not enough free memory on the node to build safely." >&2
+  echo "   free something up, or override with OTE_MIN_FREE_MB=<mb> if you accept the risk." >&2
+  exit 1
+fi
+
 echo "=== [1/3] sync source ==="
 remote "sudo -n install -d -o \$(id -u) -g \$(id -g) '$server_root/source'"
 ssh_transport="ssh"; for i in "${ssh_args[@]}"; do ssh_transport+=" $(printf '%q' "$i")"; done
@@ -37,7 +50,7 @@ rsync -a --delete \
   -e "$ssh_transport" "$repo_root/" "$server_host:$server_root/source/"
 
 echo "=== [2/3] build ==="
-remote "cd '$server_root/source' && sudo -n docker build -t '$image' ."
+remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM -t '$image' ."
 
 echo "=== [3/3] import into k3s containerd + pin ==="
 remote "sudo -n docker save '$image' | sudo -n k3s ctr -n k8s.io images import -"
