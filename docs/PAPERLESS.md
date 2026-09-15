@@ -88,6 +88,41 @@ Trigger an out-of-band run:
 kubectl -n paperless create job manual-backup --from=cronjob/paperless-postgres-backup
 ```
 
+## Rotating the database password
+
+`paperless-secret` is created out of band and is deliberately not in this repo.
+Both Deployments read the same key, `PAPERLESS_DBPASS`.
+
+The trap: `POSTGRES_PASSWORD` is only read by **initdb**, on an empty data
+directory. Changing the Secret does NOT change the password of an existing
+role -- Postgres will keep accepting the old one and rejecting the new one, and
+the app will fail to connect with no obvious cause.
+
+So rotation is two steps, database first:
+
+```bash
+NEW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
+
+# 1. change the role itself
+kubectl -n paperless exec deploy/paperless-postgres -- \
+  psql -U paperless -d paperlessdb -c "ALTER USER paperless WITH PASSWORD '$NEW';"
+
+# 2. then the Secret both Deployments read
+kubectl -n paperless patch secret paperless-secret \
+  -p "{\"stringData\":{\"PAPERLESS_DBPASS\":\"$NEW\"}}"
+
+# 3. restart the consumers (Postgres itself does not need it)
+kubectl -n paperless rollout restart deploy/paperless
+kubectl -n paperless rollout status  deploy/paperless --timeout=180s
+```
+
+Do NOT rotate `PAPERLESS_SECRET_KEY` casually -- it was carried over from the
+LXC so that existing sessions and tokens stayed valid. Changing it logs
+everyone out.
+
+The backup CronJob reads the same Secret, so it picks up the new password on
+its next run; trigger one manually to confirm before walking away.
+
 ## Rollback
 
 CT 102 still exists, stopped, with its original data and v2.18.4. Note the

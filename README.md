@@ -525,6 +525,23 @@ To avoid typing the password on every run, put it in a file and point `ansible.c
 at it (the commented `vault_password_file` line), then `chmod 600` that file and keep
 it **outside** the repo.
 
+## Open items
+
+Things known to be outstanding, so they do not get rediscovered the hard way.
+
+- **Rotate `PAPERLESS_DBPASS`.** It was printed in plain text in an operations
+  transcript. Procedure, including the initdb trap that makes the obvious
+  approach silently fail, is in [docs/PAPERLESS.md](docs/PAPERLESS.md).
+- **~49 GB orphaned `incoming/upload (1)` on the NAS Images share.** Not
+  reachable from the cluster: the allow-list exports only
+  `Images/.data/immich/data`, and the share root is refused. Delete it through
+  the UniFi UI or SMB. See [docs/KUBERNETES.md](docs/KUBERNETES.md).
+- **Stopped, not destroyed.** CTs 100 (immich), 102 (paperless), 104 (tika),
+  105 (gotenberg), 106 (events), 108 (npm), 200 (minio), 201 (postgres) and
+  206 (eventscrape) all still hold their disks as rollback. CT 206 also has
+  `onboot: 0` so a host reboot does not resurrect it. Destroy them only once
+  you are confident in the replacements.
+
 ## Future Considerations
 
 - **Static IPs:** Containers currently use DHCP. Consider assigning static IPs so the vault variables don't need updating if a container restarts with a new address.

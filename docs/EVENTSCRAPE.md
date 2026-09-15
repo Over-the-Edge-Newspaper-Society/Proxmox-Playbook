@@ -87,11 +87,13 @@ the 8 that were not created already existed, which is the migrated data.
 
 ## The old LXC containers
 
-**CT 206 `eventscrape`** — the source of this migration. Its `worker` and
-`backend` were stopped for the copy. Leaving them stopped is deliberate: if both
-deployments run, they scrape the same sources into two separate databases that
-immediately diverge. `admin` and `dashboard` are still up but broken, since
-their backend is stopped.
+**CT 206 `eventscrape`** — the source of this migration, now **fully stopped**
+with `onboot: 0` so a host reboot does not resurrect it. Leaving it stopped is
+deliberate: if both deployments run, they scrape the same sources into two
+separate databases that immediately diverge.
+
+Its disk is kept as the rollback: `/root/esc-snapshot.zip` (139 MB) and
+`/opt/eventscrape` (506 MB).
 
 To restore the LXC deployment:
 `cd /opt/eventscrape && docker compose -f docker-compose.server.yml up -d`
@@ -101,3 +103,62 @@ any of this: `api` and `worker` crash-loop with `getaddrinfo ENOTFOUND postgres`
 because the database container no longer exists. Its volumes still hold
 `postgres_data` (98 MB), `backup_data` (207 MB) and `instagram_images` (130 MB).
 Nothing was changed there.
+
+## Scraper modules
+
+The worker auto-discovers modules from `worker/src/modules/`. It logs the count
+at startup:
+
+```
+✅ Loaded 19 scraper modules
+🔄 Synced 19 modules to Convex
+```
+
+**19 loaded from 20 directories is correct.** `instagram` has no `index.ts` and
+is not auto-discovered -- `worker.ts` imports `handleInstagramScrapeJob` from it
+directly. Do not go looking for a bug there.
+
+### Verifying a deployment
+
+The image tag encodes the commit, so what is running can be checked against the
+repo:
+
+```bash
+kubectl -n eventscrape get deploy eventscrape-worker \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+# docker.io/eventscrape-local/worker:dev-<epoch>-<sha>-dirty
+```
+
+Unit tests run locally and need no cluster:
+
+```bash
+pnpm install --filter @eventscrape/worker --frozen-lockfile
+cd worker && ./node_modules/.bin/vitest run
+```
+
+Two things to expect:
+
+- A plain `pnpm install` at the root fails on `better-sqlite3` (a native build
+  belonging to `apps/api`, unrelated to the worker). Filtering to the worker
+  avoids it.
+- Three integration tests fail without Playwright's browser binaries
+  (`unbc_ca`, `prince_george_ca`, `unbctimberwolves_com`). `npx playwright
+  install` fixes it; everything else passes without a browser.
+
+### The browser pool fails open, silently
+
+The worker initialises a Playwright pool at startup. If that times out it logs a
+**warning** and carries on with website scrapes disabled:
+
+```
+⚠️  Browser pool init failed (website scrapes disabled): Timeout 180000ms exceeded
+🎉 Worker ready — polling Convex job queues
+```
+
+The pod stays `Running` and `Ready`. It happened for real when the pod started
+while the node was overloaded, so the worker looked healthy while scraping
+nothing. There is no retry -- restart the Deployment and confirm:
+
+```
+✅ Browser pool initialized with 3 browsers
+```

@@ -30,11 +30,41 @@ Last verified: 2026-09-11.
 
 ## VM sizing and the disk trap
 
-VMID 210: 8 cores, **18 GB** ceiling / 4 GB balloon floor, **250 GB** disk.
+VMID 210: 8 cores, **18 GB** ceiling / **10 GB** balloon floor, **250 GB** disk.
 
 Both were grown after the fact: the disk 60 → 120 → 250 GB, and memory
 12 → 18 GB. Note that PVE `memory` is the **boot-time** size — there is no
 hot-add here, so raising it needs a full stop and start, not a reboot.
+
+### `balloon` is a floor the host can pull you down to
+
+`memory` is a ceiling, not an allocation. `balloon` is the **floor**, and the
+host reclaims everything in between whenever it is short. The guest can be
+running with far less RAM than `qm config` implies, and nothing in the guest
+says so.
+
+The floor was 4096. Under host pressure the balloon squeezed the node down to
+**5.3 GB with 145 MB free** and 5.8M major page faults — the API server and SSH
+both stopped answering. `free -m` inside the guest reported a 5.3 GB machine.
+
+Check the real number from the host, not the guest:
+
+```bash
+echo "info balloon" | qm monitor 210
+# balloon: actual=18432 max_mem=18432 total_mem=... free_mem=10162
+```
+
+Raising the target live is also the gentlest way out of that state — it gives
+the guest enough memory to become responsive again, so you can fix the cause
+instead of hard-resetting:
+
+```bash
+echo "balloon 9216" | qm monitor 210     # live, temporary
+qm set 210 -balloon 10240                # persistent floor
+```
+
+The floor is now 10240, which is comfortable: the host has 27.7 GB and roughly
+14 GB is committed.
 
 The disk started at 60 GB and that was not enough. A full Zoer image build
 produces roughly 16 GB of Docker layers plus separate containerd copies, which
@@ -181,6 +211,36 @@ validated against the public trust store:
 curl -s -o /dev/null -w "%{http_code} ssl_verify=%{ssl_verify_result}\n" \
   https://zoer.k8s.overtheedgepaper.ca/
 ```
+
+### The NAS exports exact subpaths, not share roots
+
+The UNAS Pro allow-list grants each client a **specific path**, not the share
+above it. Mounting the share root is refused even though a path inside it works
+fine:
+
+```
+Images/.data/immich/data   mounts        <- what the Immich PV uses
+Images                     access denied
+Immich                     access denied
+```
+
+So the cluster cannot browse or clean up anything outside the exact exported
+directories. Housekeeping elsewhere on a share -- an orphaned folder, a stray
+upload directory -- has to be done through the UniFi UI or SMB, or by adding
+that path to the allow-list first.
+
+### Do NOT run a recursive scan of a NAS share from a pod
+
+A `du -sh` / `find` across a whole share stats every file over NFS. The dentry
+and inode cache that generates is charged to the node, and on a ballooned VM
+there is far less headroom than `qm config` suggests.
+
+Doing this took the cluster down: load hit **226**, the API server and SSH both
+went unreachable for ~15 minutes.
+
+If a scan is genuinely needed: give the pod a `resources.limits.memory`, use
+`-maxdepth`, and prefer `ls` over recursive `du`. Better, run it somewhere that
+is not the Kubernetes node.
 
 ## Operational gotchas
 
