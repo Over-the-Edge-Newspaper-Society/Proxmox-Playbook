@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-# Creates the two Secrets the Zoer backend needs before it will start.
+set +x
+umask 077
+# Creates the core Secret required by Zoer. DDEV setup owns its optional Secret.
 #
-# Both are referenced by `envFrom` in k8s/zoer-local/base/backend.yaml WITHOUT
-# `optional: true`, so if either is missing the pod never starts — it sits in
-# CreateContainerConfigError, which is easy to misread as an image problem.
+# The core secret is referenced by envFrom and must exist before startup.
 #
 # Neither AI_API_KEY nor SECRETS_KEY is required:
 #   - AI_API_KEY  falls back to "ollama"  (backend/src/providers/registry.ts)
@@ -12,25 +12,25 @@ set -Eeuo pipefail
 #                                          (backend/src/secrets.ts)
 # JOB_STORE_PASSWORD *is* required — the Postgres job store reads it.
 NS="${ZOER_NAMESPACE:-zoer}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
-if kubectl -n "$NS" get secret zoer-app-secret >/dev/null 2>&1; then
+existing="$(kubectl -n "$NS" get secret zoer-app-secret --ignore-not-found -o name)"
+if [[ -n "$existing" ]]; then
   echo "zoer-app-secret already exists — leaving it alone."
 else
-  JOB_STORE_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  JOB_STORE_PASSWORD="$(openssl rand -hex 24)"
   SECRETS_KEY="$(openssl rand -hex 32)"
-  kubectl -n "$NS" create secret generic zoer-app-secret \
-    --from-literal=JOB_STORE_PASSWORD="$JOB_STORE_PASSWORD" \
-    --from-literal=SECRETS_KEY="$SECRETS_KEY"
+  secret_file="$(mktemp)"
+  trap 'rm -f "$secret_file"' EXIT
+  printf 'JOB_STORE_PASSWORD=%s\nSECRETS_KEY=%s\n' "$JOB_STORE_PASSWORD" "$SECRETS_KEY" > "$secret_file"
+  kubectl -n "$NS" create secret generic zoer-app-secret --from-env-file="$secret_file"
   echo "zoer-app-secret created with generated values."
   echo "NOTE: if you are restoring an existing Zoer instance, replace these with"
   echo "      the original values or the existing database/encrypted data is unreadable."
 fi
 
-# Referenced by envFrom but has no required keys; it must simply exist.
-kubectl -n "$NS" create secret generic zoer-ddev-bridge \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-echo "zoer-ddev-bridge present."
-
-kubectl -n "$NS" get secret zoer-app-secret zoer-ddev-bridge
+# DDEV's optional secret is created by zoer-setup-ddev.sh only after the
+# worker is healthy. Never apply an empty secret over an existing credential.
+kubectl -n "$NS" get secret zoer-app-secret

@@ -66,8 +66,6 @@ spec:
               value: wp.k8s.overtheedgepaper.ca
             - name: SITES_MANAGER_DOMAIN
               value: sites.k8s.overtheedgepaper.ca
-            - name: DDEV_BRIDGE_URL
-              value: http://10.70.20.50:4085
             # Development mode: open access, no login. Paired with
             # DEV_ALLOW_PASSWORDLESS_GITHUB below, anyone who can reach this
             # instance has full workspace + GitHub account access.
@@ -106,6 +104,10 @@ spec:
                 name: zoer-app-secret
             - secretRef:
                 name: zoer-ddev-bridge
+                optional: true
+            - configMapRef:
+                name: zoer-ddev-config
+                optional: true
           volumeMounts:
             - name: backend-data
               mountPath: /data

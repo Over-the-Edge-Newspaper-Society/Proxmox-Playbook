@@ -24,7 +24,7 @@ SSH_KEY="${ES_K8S_SSH_KEY:-$HOME/.ssh/personalprox_pve_ed25519}"
 KEEP=3
 ROLLBACK=0
 
-export KUBECONFIG="${KUBECONFIG:-$HOME/github/personalprox/kubeconfig.yml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 [[ -r "$KUBECONFIG" ]] || { echo "kubeconfig not readable at $KUBECONFIG (set KUBECONFIG)" >&2; exit 1; }
 kubectl cluster-info >/dev/null 2>&1 || { echo "cannot reach the cluster with KUBECONFIG=$KUBECONFIG" >&2; exit 1; }
 

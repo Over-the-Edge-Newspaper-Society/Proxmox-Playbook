@@ -15,8 +15,7 @@ in `browser-runtime` are exactly the ones most likely to fail under emulation.
 Zoer's own `scripts/k8s-server-dev.sh` was written to build on the node for this
 reason.
 
-Docker is installed on the node purely as a **build engine**. K3s keeps using
-containerd; built images are imported into it with `k3s ctr images import`.
+Docker builds the images and, when enabled, runs the DDEV WordPress worker. K3s keeps using containerd; built images are imported into it with `k3s ctr images import`.
 
 ## Relationship to Zoer's own `k8s-server-dev.sh`
 
@@ -47,12 +46,39 @@ ZOER_K8S_DEV_SSH_KEY=~/.ssh/personalprox_pve_ed25519 \
 # 2. Submodules (the build fails without them)
 git -C ~/github/zoer submodule update --init --recursive
 
-# 3. Secrets
+# 3. Core secrets (also reconciled by deploy)
 ./scripts/zoer-create-secrets.sh
+
+# 4. Deploy reconciles DDEV setup too; use --without-ddev to opt out.
+./scripts/zoer-deploy.sh --skip-convex
 ```
 
 The node needs **15 GiB free** before a build and comfortably more after. See
 the disk section in [KUBERNETES.md](./KUBERNETES.md).
+
+## Optional DDEV worker
+
+DDEV is enabled by default on the first deployment, because local WordPress sites and **Make a local copy** require it. Later deployments reuse the saved choice in `zoer-ddev-config`; they do not undo an opt-out.
+
+```bash
+./scripts/zoer-deploy.sh --with-ddev --skip-convex     # install/configure and enable
+./scripts/zoer-deploy.sh --without-ddev --skip-convex  # disable / skip provisioning
+# Equivalent environment override: ZOER_DDEV_ENABLED=0 or 1
+
+# Reconcile only the worker and restart the backend if its configuration changed:
+./scripts/zoer-setup-ddev.sh --enable
+./scripts/zoer-setup-ddev.sh --disable
+```
+
+Enabled setup installs Docker if missing, DDEV from its [official signed APT repository](https://docs.ddev.com/en/stable/users/install/ddev-installation/), and pinned Bun (default 1.3.14). It installs the bridge source from the Zoer checkout, creates the dedicated `zoer` user with Docker access, creates/reuses one random token, installs a systemd service and a narrow inbound firewall rule, then checks authenticated health both on the host and from the existing backend before saving the enabled configuration. A failed prerequisite fails deployment; an address or empty secret alone is never considered setup success. `zoer-create-secrets.sh` no longer creates or overwrites an empty DDEV secret.
+
+The bridge binds only to `10.70.20.50:4085`, with incoming access restricted to the node, loopback and pod CIDR `10.42.0.0/16`. It is not published through ingress. DDEV's own router uses loopback ports 8080/8443 to avoid Kubernetes ingress. This installer targets the configured K3s node; override `ZOER_K8S_DEV_HOST`, `ZOER_K8S_DEV_SSH_KEY`, `ZOER_DDEV_BIND_IP` and `ZOER_DDEV_POD_CIDR` together for another installation. `ZOER_DDEV_BUN_VERSION` changes the pinned Bun version. The installer reserves `/srv/zoer-wordpress/.home` as the `zoer` service-account home and refuses to repurpose an existing account with a different home.
+
+Disabled setup does not install the worker and stops/disables an already-installed bridge. It preserves credentials, downloaded exports, project directories and existing DDEV containers; it does not delete sites or stop their containers. The backend receives `DDEV_ENABLED=0`, reports the connector as disabled and rejects DDEV operations even if credentials remain saved. The WordPress interface disables local-site creation and local-copy actions with the reason. External-site connections and Pull downloads remain available. The optional ConfigMap/Secret references allow Zoer to boot without DDEV. Re-enable to manage preserved sites again.
+
+Credentials are passed through private temporary files and stdin, never printed or stored in Git. Reruns preserve the token. If host and cluster credentials disagree, setup fails instead of rotating either silently. Only the host service/configuration is installed here; site/database creation remains the explicit WordPress UI workflow.
+
+Managed previews also require `k8s/zoer-local/base/wordpress-domains.yaml`, included in the deployment overlay. It routes `wp.k8s.overtheedgepaper.ca` to the manager and `*.wp.k8s.overtheedgepaper.ca` directly to the backend's existing site proxy. The installed `letsencrypt-cloudflare` issuer provides the matching certificate: the parent `*.k8s.overtheedgepaper.ca` certificate does not cover site subdomains. UniFi DNS resolves these names to the existing private Traefik address; this does not publish the bridge or add public DNS records. Verify the certificate is Ready before creating a copy, whose final check uses trusted HTTPS.
 
 ## Build and deploy
 
@@ -76,6 +102,34 @@ Four images are built: `browser-runtime` → `agent-runtime` → `backend` →
 `frontend`. Only backend and frontend are swapped into the Deployments; the
 other two are referenced by the backend at runtime to spawn browser and agent
 pods, which is precisely why they must be pinned.
+
+The overlay also sets `PLUGIN_RUNNER_CONTAINER_IMAGE` from the rendered backend
+image. Keep those identical: Procurement's isolated workers use the host's
+current protocol. The gateway must retain `connect-src blob:` for document
+previews and the host's Browserbase frame allowance. After changing its
+ConfigMap, restart `zoer-gateway` so nginx loads the updated policy.
+
+For an existing instance, inspect the live Convex function inventory and both
+Convex and fallback-file records before deploying functions. Back up the existing
+deployment and verify schema changes; do not use a blanket function deployment
+to repair an unexplained missing registry. `--skip-convex` preserves the function
+deployment when it has already been reconciled separately.
+
+The current worker scheduler needs the read-only `zoer-capacity-reader` role in
+`base/rbac.yaml`. A missing role leaves actions waiting for a fresh capacity
+check. Verify `/api/runtime-providers/capacity` before diagnosing queued workers.
+
+On this NFS-backed installation, uploaded packages can retain root-only file
+modes while isolated workers run as UID 977 / GID 988. If a verified installed
+worker reports its existing module as missing, inspect package traversal/read
+permissions. Give group 988 read/traverse access only to that installed package
+(directories 0750, files 0640); keep workers non-root and their volume read-only.
+Do not change permissions on the rest of `/data`. Recheck after a package upgrade.
+For a fresh Procurement installation, the managed catalog can appear in Databases
+before its primary-storage marker is initialized. Verify it has no records or
+legacy artifacts, then use the declared `catalog.migrate` plan/run workflow to
+initialize that existing catalog. Do not write SQLite flags directly or force
+migration of an occupied catalog.
 
 ### What the script handles
 

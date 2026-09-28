@@ -13,8 +13,7 @@ resources:
   - backend.yaml
   - frontend.yaml
   - gateway.yaml
+  - wordpress-domains.yaml
 
-# wordpress-domains.yaml / sites-domains.yaml are intentionally excluded:
-# each declares a cert-manager Certificate for a public *.k8s.overtheedgepaper.ca domain,
-# and cert-manager is not installed on this cluster. The local ingress
-# (zoer.k8s.ote) lives in gateway.yaml and is unaffected.
+# Managed WordPress uses the installed cert-manager DNS-01 issuer. Generic
+# Sites domains remain separate from this WordPress runtime setup.

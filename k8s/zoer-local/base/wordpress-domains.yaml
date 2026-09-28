@@ -1,0 +1,50 @@
+# Managed WordPress origins stay on the existing private Traefik address.
+# The parent *.k8s certificate cannot cover a second-level site hostname.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zoer-wordpress-domains
+spec:
+  secretName: zoer-wordpress-domains-tls
+  issuerRef:
+    name: letsencrypt-cloudflare
+    kind: ClusterIssuer
+  dnsNames:
+    - wp.k8s.overtheedgepaper.ca
+    - "*.wp.k8s.overtheedgepaper.ca"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zoer-wordpress-domains
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: zoer-wordpress-domains-tls
+      hosts:
+        - wp.k8s.overtheedgepaper.ca
+        - "*.wp.k8s.overtheedgepaper.ca"
+  rules:
+    - host: wp.k8s.overtheedgepaper.ca
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-gateway
+                port:
+                  number: 80
+    - host: "*.wp.k8s.overtheedgepaper.ca"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zoer-backend
+                port:
+                  number: 4000

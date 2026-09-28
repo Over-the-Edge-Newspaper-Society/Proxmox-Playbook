@@ -2,6 +2,19 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: zoer
 
+# Isolated plugin workers must run the same host protocol as the backend.
+replacements:
+  - source:
+      kind: Deployment
+      name: zoer-backend
+      fieldPath: spec.template.spec.containers.[name=backend].image
+    targets:
+      - select:
+          kind: Deployment
+          name: zoer-backend
+        fieldPaths:
+          - spec.template.spec.containers.[name=backend].env.[name=PLUGIN_RUNNER_CONTAINER_IMAGE].value
+
 resources:
   - ../base
 
@@ -11,7 +24,7 @@ resources:
 images:
   - name: ghcr.io/ahzs645/zoer/backend
     newName: docker.io/zoer-local/backend
-    newTag: dev-1789493208-7e9d6f2-dirty
+    newTag: dev-1790557898-6ca6bc6-dirty
   - name: ghcr.io/ahzs645/zoer/frontend
     newName: docker.io/zoer-local/frontend
-    newTag: dev-1789493208-7e9d6f2-dirty
+    newTag: dev-1790557898-6ca6bc6-dirty

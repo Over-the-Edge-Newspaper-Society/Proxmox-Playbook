@@ -28,7 +28,7 @@ FRESH_HOURS="${ZOER_PRUNE_FRESH_HOURS:-3}"
 APPLY=0
 [[ "${1:-}" == "--apply" ]] && APPLY=1
 
-export KUBECONFIG="${KUBECONFIG:-$HOME/github/personalprox/kubeconfig.yml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 ssh_args=(-o BatchMode=yes -o ConnectTimeout=15 -i "$SSH_KEY" -o IdentitiesOnly=yes)
 remote() { ssh "${ssh_args[@]}" "$SERVER_HOST" "$@"; }
 norm() { sed -e 's#^docker\.io/##' -e 's#^library/##' -e '/^$/d'; }

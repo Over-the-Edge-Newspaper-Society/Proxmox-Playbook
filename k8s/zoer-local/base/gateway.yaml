@@ -172,7 +172,7 @@ data:
           # keeps allowlisting in one place (here) instead of also in the
           # frontend image.
           proxy_hide_header Content-Security-Policy;
-          add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://github.com https://avatars.githubusercontent.com; connect-src 'self' ws: wss: http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca; frame-src 'self' http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote https://*.k8s.overtheedgepaper.ca;" always;
+          add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://github.com https://avatars.githubusercontent.com; connect-src 'self' blob: ws: wss: http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca; frame-src 'self' https://www.browserbase.com http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://*.k8s.ote https://*.k8s.overtheedgepaper.ca;" always;
         }
       }
     }

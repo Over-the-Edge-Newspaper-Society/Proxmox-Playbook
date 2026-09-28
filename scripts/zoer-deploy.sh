@@ -6,6 +6,8 @@ set -Eeuo pipefail
 #   ./scripts/zoer-deploy.sh --keep 2    # keep N old dev images per component (default 2)
 #   ./scripts/zoer-deploy.sh --rollback  # back to the previously deployed images
 #   ./scripts/zoer-deploy.sh --force     # deploy even if plugin workers are running
+#   ./scripts/zoer-deploy.sh --without-ddev # disable / skip the DDEV worker
+#   ./scripts/zoer-deploy.sh --with-ddev    # install and enable the DDEV worker
 #   ./scripts/zoer-deploy.sh --skip-convex  # skip the Convex function deploy
 #
 # Zoer's own scripts/k8s-server-dev.sh cannot be used on this cluster: its `up`
@@ -29,7 +31,7 @@ ROLLBACK=0
 FORCE=0
 SKIP_CONVEX=0
 
-export KUBECONFIG="${KUBECONFIG:-$HOME/github/personalprox/kubeconfig.yml}"
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 [[ -r "$KUBECONFIG" ]] || { echo "kubeconfig not readable at $KUBECONFIG (set KUBECONFIG)" >&2; exit 1; }
 kubectl cluster-info >/dev/null 2>&1 || { echo "cannot reach the cluster with KUBECONFIG=$KUBECONFIG" >&2; exit 1; }
 
@@ -39,6 +41,8 @@ while [[ $# -gt 0 ]]; do
     --rollback) ROLLBACK=1; shift ;;
     --force) FORCE=1; shift ;;
     --skip-convex) SKIP_CONVEX=1; shift ;;
+    --without-ddev) export ZOER_DDEV_ENABLED=0; shift ;;
+    --with-ddev) export ZOER_DDEV_ENABLED=1; shift ;;
     -h|--help) grep -m20 '^#' "$0" | tail -n +2 | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -79,6 +83,10 @@ check_plugin_workers() {
   fi
 }
 check_plugin_workers
+
+# Reconcile the saved runtime choice before enabling it in the next pod.
+"$HERE/zoer-create-secrets.sh"
+ZOER_DDEV_DEFER_ROLLOUT=1 "$HERE/zoer-setup-ddev.sh"
 
 # Deploy Convex functions BEFORE the new image. Zoer's backend calls Convex
 # functions by name; ship app code that references a function the deployment

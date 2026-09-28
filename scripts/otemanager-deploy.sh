@@ -17,9 +17,12 @@ set -Eeuo pipefail
 #
 # Uncommitted changes are included: the source is rsynced, not pulled from git.
 
-# The cluster kubeconfig is written by the K3s playbook to the personalprox
-# repo root. Override with KUBECONFIG if yours lives elsewhere.
-export KUBECONFIG="${KUBECONFIG:-$HOME/github/personalprox/kubeconfig.yml}"
+# Cluster kubeconfig for the Over-the-Edge k3s node (10.70.20.50).
+# NOTE: this deliberately does NOT live in the personalprox repo — that is a
+# separate personal homelab on 192.168.1.x, and pointing here at its kubeconfig
+# once caused an org deploy to be aimed at the wrong cluster.
+# Override with KUBECONFIG if yours lives elsewhere.
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 [[ -r "$KUBECONFIG" ]] || { echo "kubeconfig not readable at $KUBECONFIG (set KUBECONFIG)" >&2; exit 1; }
 kubectl cluster-info >/dev/null 2>&1 || { echo "cannot reach the cluster with KUBECONFIG=$KUBECONFIG" >&2; exit 1; }
 
