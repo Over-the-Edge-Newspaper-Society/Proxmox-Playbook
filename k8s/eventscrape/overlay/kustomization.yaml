@@ -8,6 +8,6 @@ resources:
 # Images built on the node by scripts/eventscrape-local-build.sh.
 images:
   - name: docker.io/eventscrape-local/admin
-    newTag: dev-1789507707-2e97461
+    newTag: dev-1790621749-fa6dcee-dirty
   - name: docker.io/eventscrape-local/worker
-    newTag: dev-1789507707-2e97461
+    newTag: dev-1790621749-fa6dcee-dirty
