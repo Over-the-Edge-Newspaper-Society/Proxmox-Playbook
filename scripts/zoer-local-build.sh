@@ -56,7 +56,7 @@ rsync -a --delete \
 echo "sync done"
 
 echo "=== [2/6] browser-runtime ==="
-runtime_hash="$(remote "cd '$server_root/source' && cat browser-runtime/Dockerfile browser-runtime/requirements.txt browser-runtime/runtime.py browser-runtime/automation.py browser-runtime/input-check.html browser-runtime/install_clearcote.py browser-runtime/clearcote-pin.json browser-runtime/install_update.py | sha256sum | cut -c1-16")"
+runtime_hash="$(remote "cd '$server_root/source' && cat browser-runtime/Dockerfile browser-runtime/requirements.txt browser-runtime/runtime.py browser-runtime/automation.py browser-runtime/document_download.py browser-runtime/opportunity_download.py browser-runtime/input-check.html browser-runtime/install_clearcote.py browser-runtime/clearcote-pin.json browser-runtime/install_update.py | sha256sum | cut -c1-16")"
 runtime_image="docker.io/zoer-local/browser-runtime:$runtime_hash"
 remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM -t '$runtime_image' browser-runtime && sudo -n docker save '$runtime_image' | sudo -n k3s ctr -n k8s.io images import -"
 remote "sudo -n k3s ctr -n k8s.io images label '$runtime_image' io.cri-containerd.pinned=pinned >/dev/null"
