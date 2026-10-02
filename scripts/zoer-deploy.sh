@@ -5,7 +5,9 @@ set -Eeuo pipefail
 #   ./scripts/zoer-deploy.sh             # build backend+frontend, apply, verify
 #   ./scripts/zoer-deploy.sh --keep 2    # keep N old dev images per component (default 2)
 #   ./scripts/zoer-deploy.sh --rollback  # back to the previously deployed images
-#   ./scripts/zoer-deploy.sh --force     # deploy even if plugin workers are running
+#   ./scripts/zoer-deploy.sh --force     # drain but do not wait for running work
+#   ./scripts/zoer-deploy.sh --drain-timeout 900 # seconds to wait for the drain (default 600)
+#   ./scripts/zoer-deploy.sh --no-drain  # legacy: no drain, refuse while plugin workers run
 #   ./scripts/zoer-deploy.sh --without-ddev # disable / skip the DDEV worker
 #   ./scripts/zoer-deploy.sh --with-ddev    # install and enable the DDEV worker
 #   ./scripts/zoer-deploy.sh --skip-convex  # skip the Convex function deploy
@@ -19,6 +21,12 @@ set -Eeuo pipefail
 #
 # Zoer images are large (backend ~8.7GB). The build needs >=15 GiB free and
 # takes 20-30 minutes from cold with no Docker layer cache.
+#
+# Maintenance drain: after the build and before the rollout the backend is asked
+# to drain (pause long-running work, stop claiming new steps). The script polls
+# until it is safe to restart, rolls out, then resumes the paused work on the new
+# backend. Any failure, timeout, rollback or Ctrl-C after the drain resumes the
+# work on whichever backend pod answers. See docs/ZOER-LOCAL.md.
 
 NS="${ZOER_NAMESPACE:-zoer}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,6 +38,11 @@ KEEP=2
 ROLLBACK=0
 FORCE=0
 SKIP_CONVEX=0
+DRAIN=1
+DRAIN_TIMEOUT=600
+
+# shellcheck source=SCRIPTDIR/lib/zoer-maintenance.sh
+source "$HERE/lib/zoer-maintenance.sh"
 
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 [[ -r "$KUBECONFIG" ]] || { echo "kubeconfig not readable at $KUBECONFIG (set KUBECONFIG)" >&2; exit 1; }
@@ -40,13 +53,19 @@ while [[ $# -gt 0 ]]; do
     --keep) KEEP="$2"; shift 2 ;;
     --rollback) ROLLBACK=1; shift ;;
     --force) FORCE=1; shift ;;
+    --no-drain) DRAIN=0; shift ;;
+    --drain-timeout) DRAIN_TIMEOUT="$2"; shift 2 ;;
     --skip-convex) SKIP_CONVEX=1; shift ;;
     --without-ddev) export ZOER_DDEV_ENABLED=0; shift ;;
     --with-ddev) export ZOER_DDEV_ENABLED=1; shift ;;
-    -h|--help) grep -m20 '^#' "$0" | tail -n +2 | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+[[ "$DRAIN_TIMEOUT" =~ ^[0-9]+$ ]] || { echo "--drain-timeout needs a number of seconds" >&2; exit 2; }
+if [[ "$DRAIN" == "1" ]] && ! command -v jq >/dev/null; then
+  echo "jq is required for the maintenance drain (install it, or use --no-drain)." >&2; exit 1
+fi
 
 ssh_args=(-o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" -o IdentitiesOnly=yes)
 remote() { ssh "${ssh_args[@]}" "$SERVER_HOST" "$@"; }
@@ -62,16 +81,20 @@ if [[ "$ROLLBACK" == "1" ]]; then
   kubectl -n "$NS" set image deploy/zoer-frontend "frontend=$pf"
   kubectl -n "$NS" rollout status deploy/zoer-backend  --timeout=600s
   kubectl -n "$NS" rollout status deploy/zoer-frontend --timeout=600s
+  if zm_probe && [[ "$(zm_json '.draining')" == "true" ]]; then
+    echo "!! the backend is still draining (drainId $(zm_json '.drainId'), expires $(zm_json '.expiresAt'))." >&2
+    zm_manual_hint
+  fi
   exit 0
 fi
 
-# Upstream refuses to deploy while plugin workers exist, with good reason:
-# rolling the backend severs an in-flight integration worker's capability
-# stream mid-run. Re-checked here because a build takes many minutes.
+# Legacy guard (--no-drain, or a backend without the maintenance API): refuse
+# while plugin workers exist, because rolling the backend severs an in-flight
+# integration worker's capability stream mid-run. With the drain the backend
+# pauses those workers itself and the drain wait also waits for their pods.
 check_plugin_workers() {
   local w
-  w="$(kubectl -n "$NS" get pods -l zoer.plugin-runner=true \
-        --field-selector=status.phase!=Succeeded,status.phase!=Failed -o name 2>/dev/null || true)"
+  w="$(zm_plugin_pods)"
   if [[ -n "$w" ]]; then
     echo "Plugin workers are still running:" >&2; echo "$w" >&2
     if [[ "$FORCE" == "1" ]]; then
@@ -82,7 +105,31 @@ check_plugin_workers() {
     fi
   fi
 }
-check_plugin_workers
+
+# From here on, a drained backend is resumed on any exit (failure, Ctrl-C...).
+trap zm_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Probe before the long build so an old backend is reported up front.
+MAINT_OK=0
+if [[ "$DRAIN" == "1" ]]; then
+  if zm_probe; then
+    MAINT_OK=1
+    if [[ "$(zm_json '.draining')" == "true" ]]; then
+      echo "!! the backend is already draining (drainId $(zm_json '.drainId'), requested $(zm_json '.requestedAt'))." >&2
+      echo "   A previous deploy probably died; this deploy reuses that drain and resumes it at the end." >&2
+    fi
+    w="$(zm_plugin_pods)"
+    [[ -n "$w" ]] && { echo "==> plugin workers running now (the drain after the build pauses them):"; echo "    ${w//$'\n'/$'\n'    }"; }
+  elif [[ "$ZM_STATUS" == "404" ]]; then
+    echo "!! the running backend has no maintenance API (HTTP 404) - expected on the first deploy" >&2
+    echo "   of the drain feature. Using the legacy plugin-worker guard for this deploy." >&2
+  else
+    echo "!! could not query the maintenance API (HTTP $ZM_STATUS); using the legacy plugin-worker guard for now." >&2
+  fi
+fi
+[[ "$MAINT_OK" == "1" ]] || check_plugin_workers
 
 # Reconcile the saved runtime choice before enabling it in the next pod.
 "$HERE/zoer-create-secrets.sh"
@@ -136,8 +183,35 @@ TAG="$(grep -oE 'BUILD COMPLETE: (.+)' "$LOG" | sed 's/BUILD COMPLETE: //')"
 rm -f "$LOG"
 [[ -n "$TAG" ]] || { echo "Build did not report a tag." >&2; exit 1; }
 
-# Builds are slow; a worker may have started in the meantime.
-check_plugin_workers
+# Drain before the rollout (re-checked after the build, which takes many minutes).
+if [[ "$DRAIN" == "1" ]]; then
+  echo "==> draining Zoer (pausing long-running work; timeout ${DRAIN_TIMEOUT}s)"
+  ttl=$(( DRAIN_TIMEOUT + 1500 )); (( ttl < 2700 )) && ttl=2700; (( ttl > 7200 )) && ttl=7200
+  drain_rc=0; zm_drain "zoer-deploy $TAG" "$ttl" || drain_rc=$?
+  case "$drain_rc" in
+    0)
+      if [[ "$FORCE" == "1" ]]; then
+        echo "    --force: not waiting for the drain; current state:"
+        zm_show_status | sed 's/^/    /'
+      elif ! zm_wait_safe "$DRAIN_TIMEOUT"; then
+        echo "!! work did not drain within ${DRAIN_TIMEOUT}s - nothing was deployed." >&2
+        echo "   Re-run later, raise --drain-timeout, or use --force to restart anyway." >&2
+        exit 1
+      fi ;;
+    1)
+      echo "!! the backend has no maintenance API (HTTP 404) - falling back to the legacy plugin-worker guard." >&2
+      check_plugin_workers ;;
+    *)
+      if [[ "$FORCE" != "1" ]]; then
+        echo "!! could not drain the backend - nothing was deployed (use --force or --no-drain to override)." >&2
+        exit 1
+      fi
+      echo "--force given; continuing without a confirmed drain." >&2
+      check_plugin_workers ;;
+  esac
+else
+  check_plugin_workers
+fi
 
 PREV_B="$(image_of zoer-backend  2>/dev/null || true)"
 PREV_F="$(image_of zoer-frontend 2>/dev/null || true)"
@@ -163,7 +237,16 @@ if [[ "$ok" == "0" ]]; then
   kubectl -n "$NS" rollout status deploy/zoer-backend  --timeout=600s || true
   kubectl -n "$NS" rollout status deploy/zoer-frontend --timeout=600s || true
   echo "--- backend logs ---" >&2; kubectl -n "$NS" logs deploy/zoer-backend --tail=40 >&2 || true
-  exit 1
+  exit 1   # the EXIT trap resumes paused work on the rolled-back backend
+fi
+
+if [[ "$ZM_DRAINED" == "1" ]]; then
+  echo "==> resuming paused work on the new backend"
+  if ! zm_resume_new 300; then
+    echo "!! the deploy itself succeeded, but paused work was not resumed." >&2
+    ZM_TRAP_WAIT=30
+    exit 1
+  fi
 fi
 
 # Prune per component so backend and frontend are kept independently, and never

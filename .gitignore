@@ -8,3 +8,4 @@ kubeconfig.yml
 # Vault password, if you ever keep one on disk (see ansible.cfg)
 .vault-pass
 *.vault-pass
+__pycache__/

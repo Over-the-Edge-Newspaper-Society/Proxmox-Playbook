@@ -86,7 +86,9 @@ Managed previews also require `k8s/zoer-local/base/wordpress-domains.yaml`, incl
 ./scripts/zoer-deploy.sh              # build both images, apply, verify
 ./scripts/zoer-deploy.sh --rollback   # back to the previously deployed images
 ./scripts/zoer-deploy.sh --keep 1     # keep N old dev images per component
-./scripts/zoer-deploy.sh --force      # deploy despite running plugin workers
+./scripts/zoer-deploy.sh --force      # drain, but restart without waiting for work
+./scripts/zoer-deploy.sh --drain-timeout 900  # wait up to N s for the drain (default 600)
+./scripts/zoer-deploy.sh --no-drain   # legacy: no drain; refuse while plugin workers run
 ```
 
 Builds the current working tree on the node and rolls backend and frontend out
@@ -144,11 +146,15 @@ migration of an occupied catalog.
   them. Every Convex-backed feature 404'd; the WordPress "Test and add site"
   flow was the first thing to surface it. `--skip-convex` opts out.
 
-- **Refuses to deploy while plugin workers are running.** Rolling the backend
-  severs an in-flight integration worker's capability stream. Upstream's
-  `k8s-server-dev.sh` guards this too; the check runs twice — before the build
-  and again after, because a build takes long enough for a worker to start.
-  `--force` overrides it.
+- **Drains the backend before restarting it** (see *Maintenance drain* below),
+  so long-running work is paused with its progress saved and resumed on the new
+  backend, instead of being cut off mid-run.
+- **Falls back to refusing while plugin workers run** when draining is not
+  available (`--no-drain`, or a backend image that predates the maintenance
+  API). Rolling the backend severs an in-flight integration worker's capability
+  stream; upstream's `k8s-server-dev.sh` guards this too. The check runs before
+  the build and again after, because a build takes long enough for a worker to
+  start. `--force` overrides it.
 - **Pins all four images** against kubelet's image GC. The build script
   originally pinned only `browser-runtime`, and `agent-runtime` was duly
   garbage-collected at 88% disk — nothing was running that referenced it, since
@@ -160,6 +166,69 @@ migration of an occupied catalog.
 - **Excludes generated artifacts.** `output/` alone is ~689 MB across 49k files
   and was previously rsynced into the build context on every build; it is now in
   `.gitignore`, `.dockerignore` and the rsync excludes.
+
+### Maintenance drain
+
+The backend has a loopback-only API, `/api/internal/maintenance`, that pauses
+long-running work for a restart. The deploy uses it like this:
+
+1. **Before the build** it probes the API and lists running plugin workers
+   (informational; the build does not pause anything).
+2. **After the build** it calls `POST …/drain`. The backend stops claiming new
+   steps (new runs queue as *Paused for Zoer update*), skips schedule ticks, asks
+   running plugin workers to save progress and stop, and parks their steps.
+3. It **polls every 5 s** and prints a compact table of `active` steps, `blocking`
+   work that cannot be paused (WordPress operations, notebook runs, chat turns…)
+   and unfinished plugin-runner pods, until the backend reports
+   `safeToRestart` and no worker pods remain — or `--drain-timeout` (600 s) runs
+   out. On timeout nothing is deployed and the drain is lifted again.
+4. It **rolls out**, waits for both rollouts, then calls `POST …/resume` on the
+   *new* backend pod (waiting until it answers) and checks it reports
+   `draining: false`. The drain state lives in `/data/maintenance.json`, so the
+   new pod starts drained and only picks paused work up when told to.
+
+If anything fails after step 2 — drain timeout, failed rollout (the automatic
+rollback runs first), a resume error, Ctrl-C or SIGTERM — an exit trap resumes
+the work on whichever backend pod answers, and prints the manual command if no
+pod does. As a last safety net the drain carries a TTL (`max(2700, timeout+1500)`
+seconds); a backend that starts with an expired drain resumes by itself.
+
+`--force` still drains and resumes, but does not wait: whatever has not paused
+is cut off by the restart (the backend's SIGTERM handler gets ~25 s to park it).
+`--no-drain` is the old behaviour. A backend that answers **404** — expected on
+the first deploy of an image with this feature — produces a warning and the
+legacy plugin-worker guard, not a failure. The local machine needs `jq`.
+
+The backend Deployment uses the **`Recreate` strategy** with
+`terminationGracePeriodSeconds: 120`. The run store is JSON on one RWO NFS
+volume; a rolling update would start the new pod and let it write those files
+while the old pod is still running. Recreate stops the old pod first, at the
+cost of roughly 15–30 s without an API (the image is already on the node, and
+the frontend stays up). The trade-off: a new image that fails to start leaves no
+backend until the automatic rollback finishes.
+
+Drain, inspect and resume by hand (the API only answers on loopback, hence
+`kubectl exec`; the image has `bun` but no `curl`):
+
+```bash
+zm() {  # zm GET "" | zm POST /drain '{"reason":"manual"}' | zm POST /resume '{}'
+  kubectl -n zoer exec deploy/zoer-backend -c backend -- bun -e '
+    const [m, s, b] = process.argv.slice(-3);
+    const r = await fetch("http://127.0.0.1:" + (process.env.PORT || 4000) + "/api/internal/maintenance" + s,
+      { method: m, headers: { "content-type": "application/json" }, body: b || undefined });
+    console.log(r.status, await r.text());' "$1" "$2" "${3:-}"
+}
+zm GET ""                                       # status: draining, active, paused, blocking, safeToRestart
+zm POST /drain '{"reason":"manual","ttlSeconds":3600}'
+zm POST /resume '{}'                            # lift the drain, re-queue paused steps
+```
+
+Testing the script locally: `python3 -m unittest tests.test_zoer_maintenance`
+runs the drain, timeout, `--force`, `--no-drain`, rollback, Ctrl-C and old-backend
+paths against a stub API with stubbed `kubectl`/`ssh`. To point the helpers at
+a backend you run yourself, set `ZOER_MAINTENANCE_URL=http://127.0.0.1:4000`
+(and `ZOER_MAINTENANCE_TOKEN` if it requires one); they then use local `curl`
+and skip the plugin-runner pod check.
 
 ## Verifying it is really your build
 

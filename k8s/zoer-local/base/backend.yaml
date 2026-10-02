@@ -4,6 +4,13 @@ metadata:
   name: zoer-backend
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate: the backend keeps its run store as JSON files on
+  # a single RWO volume, and a surge pod would write them while the old pod is
+  # still draining. Stop the old pod first; costs ~15-30s of API downtime.
+  # rollingUpdate: null clears the live object's RollingUpdate params on apply.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app: zoer-backend
@@ -13,6 +20,8 @@ spec:
         app: zoer-backend
     spec:
       serviceAccountName: zoer-backend
+      # SIGTERM makes the backend drain (~25s budget) before exiting; leave room.
+      terminationGracePeriodSeconds: 120
       containers:
         - name: backend
           image: ghcr.io/ahzs645/zoer/backend:main-1786607845-0051036 # {"$imagepolicy": "flux-system:zoer-backend"}
