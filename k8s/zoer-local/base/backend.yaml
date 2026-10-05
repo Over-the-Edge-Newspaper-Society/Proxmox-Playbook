@@ -37,8 +37,6 @@ spec:
               value: America/Vancouver
             - name: LOG_LEVEL
               value: info
-            - name: NODE_OPTIONS
-              value: --max-old-space-size=4096
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             - name: AI_BASE_URL
@@ -131,7 +129,8 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 512Mi
+              # Steady state is 300-900 Mi; ask for what it normally uses so the scheduler accounts for it.
+              memory: 1Gi
               ephemeral-storage: 1Gi
             limits:
               memory: 2Gi

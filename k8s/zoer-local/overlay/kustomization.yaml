@@ -24,7 +24,7 @@ resources:
 images:
   - name: ghcr.io/ahzs645/zoer/backend
     newName: docker.io/zoer-local/backend
-    newTag: dev-1791167223-48b4469
+    newTag: dev-1791206813-a1afbe3
   - name: ghcr.io/ahzs645/zoer/frontend
     newName: docker.io/zoer-local/frontend
-    newTag: dev-1791167223-48b4469
+    newTag: dev-1791206813-a1afbe3
