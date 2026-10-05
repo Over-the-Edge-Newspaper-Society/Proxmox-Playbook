@@ -166,7 +166,15 @@ fi
 # Pre-flight: refuse to build when the node has no memory headroom. A build
 # here competes with the workloads it is deploying; starving the node takes out
 # the API server and every app, and recovery needed a hard VM restart.
-MIN_FREE_MB="${ZOER_MIN_FREE_MB:-6000}"
+# The build may use up to its cap (ZOER_BUILD_MEM, enforced by the capped buildx
+# builder in zoer-local-build.sh); keep 1.5 GB beyond that for the running cluster.
+build_mem="${ZOER_BUILD_MEM:-6g}"
+case "$build_mem" in
+  *[gG]) build_mem_mb=$(( ${build_mem%[gG]} * 1024 )) ;;
+  *[mM]) build_mem_mb=${build_mem%[mM]} ;;
+  *) echo "ZOER_BUILD_MEM must look like 6g or 5120m." >&2; exit 2 ;;
+esac
+MIN_FREE_MB="${ZOER_MIN_FREE_MB:-$(( build_mem_mb + 1536 ))}"
 avail_mb="$(remote "free -m | awk '/^Mem:/{print \$7}'" 2>/dev/null || echo 0)"
 echo "==> node memory available: ${avail_mb} MB (need >= ${MIN_FREE_MB} MB)"
 if [[ "${avail_mb:-0}" -lt "$MIN_FREE_MB" ]]; then

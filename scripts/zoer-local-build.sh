@@ -24,12 +24,23 @@ key="${ZOER_K8S_DEV_SSH_KEY:-$HOME/.ssh/personalprox_pve_ed25519}"
 # 148 MB free with no swap, load 61, and took every app AND the API server down
 # until the VM had to be hard-restarted. Capping trades a slower build for a
 # cluster that stays up.
+#
+# `docker build --memory` does NOT cap anything: BuildKit (the default builder)
+# ignores it, which is how the 2026-10-01 and 10-02 deploys still starved the
+# node (175 MB free, ~22 and ~39 min of API outage). Builds therefore run in a
+# dedicated docker-container buildx builder whose container has the memory
+# limit; a build that needs more fails with "cannot allocate memory" instead of
+# taking the node down. The builder is named after its limit and reused, so its
+# layer cache survives between deploys (the first build on it is cold).
 BUILD_MEM="${ZOER_BUILD_MEM:-6g}"
+BUILDER="zoer-capped-${BUILD_MEM}"
 
 if [[ ! -d "$repo_root/.git" ]]; then
   echo "Zoer repo not found at $repo_root (set ZOER_REPO_ROOT)" >&2; exit 1
 fi
-if [[ ! -d "$repo_root/themes/resume/ahmadstyle" || ! -f "$repo_root/vendor/rendercv-toolkit/package.json" ]]; then
+# Every submodule the checkout declares must be initialised (a leading "-" in `git submodule status`).
+# The list is read from the repo, so dropping or adding a submodule in Zoer needs no change here.
+if git -C "$repo_root" submodule status --recursive 2>/dev/null | grep -q '^-'; then
   echo "Submodules missing. Run: git -C '$repo_root' submodule update --init --recursive" >&2; exit 1
 fi
 ssh_args=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -i "$key" -o IdentitiesOnly=yes)
@@ -55,10 +66,13 @@ rsync -a --delete \
   -e "$ssh_transport" "$repo_root/" "$server_host:$server_root/source/"
 echo "sync done"
 
+remote "sudo -n docker buildx inspect '$BUILDER' >/dev/null 2>&1 || sudo -n docker buildx create --name '$BUILDER' --driver docker-container --driver-opt memory=$BUILD_MEM --driver-opt memory-swap=$BUILD_MEM >/dev/null"
+echo "builder=$BUILDER (memory capped at $BUILD_MEM)"
+
 echo "=== [2/6] browser-runtime ==="
 runtime_hash="$(remote "cd '$server_root/source' && cat browser-runtime/Dockerfile browser-runtime/requirements.txt browser-runtime/runtime.py browser-runtime/automation.py browser-runtime/document_download.py browser-runtime/opportunity_download.py browser-runtime/input-check.html browser-runtime/install_clearcote.py browser-runtime/clearcote-pin.json browser-runtime/install_update.py | sha256sum | cut -c1-16")"
 runtime_image="docker.io/zoer-local/browser-runtime:$runtime_hash"
-remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM -t '$runtime_image' browser-runtime && sudo -n docker save '$runtime_image' | sudo -n k3s ctr -n k8s.io images import -"
+remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load -t '$runtime_image' browser-runtime && sudo -n docker save '$runtime_image' | sudo -n k3s ctr -n k8s.io images import -"
 remote "sudo -n k3s ctr -n k8s.io images label '$runtime_image' io.cri-containerd.pinned=pinned >/dev/null"
 echo "runtime_image=$runtime_image"
 
@@ -66,15 +80,15 @@ echo "=== [3/6] agent-runtime ==="
 agent_hash="$(cat "$repo_root/agent-runtime/Dockerfile" "$repo_root/backend/src/agent-runners/worker.ts" | shasum -a 256 | cut -c1-16)"
 agent_image="docker.io/zoer-local/agent-runtime:$agent_hash"
 remote "sudo -n docker image inspect '$agent_image' >/dev/null 2>&1" || \
-  remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM -f agent-runtime/Dockerfile -t '$agent_image' ."
+  remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load -f agent-runtime/Dockerfile -t '$agent_image' ."
 remote "sudo -n docker save '$agent_image' | sudo -n k3s ctr -n k8s.io images import -"
 echo "agent_image=$agent_image"
 
 echo "=== [4/6] backend ==="
-remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM --build-arg 'ZOER_BROWSER_RUNTIME_IMAGE=$runtime_image' --build-arg 'ZOER_AGENT_RUNTIME_IMAGE=$agent_image' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f backend/Dockerfile -t 'docker.io/zoer-local/backend:$image_tag' ."
+remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_BROWSER_RUNTIME_IMAGE=$runtime_image' --build-arg 'ZOER_AGENT_RUNTIME_IMAGE=$agent_image' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f backend/Dockerfile -t 'docker.io/zoer-local/backend:$image_tag' ."
 
 echo "=== [5/6] frontend ==="
-remote "cd '$server_root/source' && sudo -n docker build --memory=$BUILD_MEM --memory-swap=$BUILD_MEM --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f frontend/Dockerfile -t 'docker.io/zoer-local/frontend:$image_tag' ."
+remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f frontend/Dockerfile -t 'docker.io/zoer-local/frontend:$image_tag' ."
 
 echo "=== [6/6] import into k3s containerd ==="
 remote "sudo -n docker save 'docker.io/zoer-local/backend:$image_tag' 'docker.io/zoer-local/frontend:$image_tag' | sudo -n k3s ctr -n k8s.io images import -"
