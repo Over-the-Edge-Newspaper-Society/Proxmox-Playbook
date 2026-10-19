@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - storage.yaml
+  - project-database-storage.yaml
   - job-store-postgres.yaml
   - plugin-runner-network-policy.yaml
   - convex.yaml
@@ -14,6 +15,7 @@ resources:
   - frontend.yaml
   - gateway.yaml
   - wordpress-domains.yaml
+  - t3code-hosts.yaml
 
 # Managed WordPress uses the installed cert-manager DNS-01 issuer. Generic
 # Sites domains remain separate from this WordPress runtime setup.

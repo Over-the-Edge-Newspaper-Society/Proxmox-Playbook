@@ -35,7 +35,7 @@ key="${ZOER_K8S_DEV_SSH_KEY:-$HOME/.ssh/personalprox_pve_ed25519}"
 BUILD_MEM="${ZOER_BUILD_MEM:-6g}"
 BUILDER="zoer-capped-${BUILD_MEM}"
 
-if [[ ! -d "$repo_root/.git" ]]; then
+if [[ ! -e "$repo_root/.git" ]]; then  # a file in git worktrees
   echo "Zoer repo not found at $repo_root (set ZOER_REPO_ROOT)" >&2; exit 1
 fi
 # Every submodule the checkout declares must be initialised (a leading "-" in `git submodule status`).
@@ -70,11 +70,18 @@ remote "sudo -n docker buildx inspect '$BUILDER' >/dev/null 2>&1 || sudo -n dock
 echo "builder=$BUILDER (memory capped at $BUILD_MEM)"
 
 echo "=== [2/6] browser-runtime ==="
-runtime_hash="$(remote "cd '$server_root/source' && cat browser-runtime/Dockerfile browser-runtime/requirements.txt browser-runtime/runtime.py browser-runtime/automation.py browser-runtime/document_download.py browser-runtime/opportunity_download.py browser-runtime/input-check.html browser-runtime/install_clearcote.py browser-runtime/clearcote-pin.json browser-runtime/install_update.py | sha256sum | cut -c1-16")"
+runtime_hash="$(remote "cd '$server_root/source' && cat browser-runtime/Dockerfile browser-runtime/requirements.txt browser-runtime/runtime.py browser-runtime/pool.py browser-runtime/observation.py browser-runtime/automation.py browser-runtime/document_download.py browser-runtime/download_diagnostics.py browser-runtime/migrate_profile.py browser-runtime/opportunity_download.py browser-runtime/input-check.html browser-runtime/install_clearcote.py browser-runtime/clearcote-pin.json browser-runtime/install_update.py | sha256sum | cut -c1-16")"
 runtime_image="docker.io/zoer-local/browser-runtime:$runtime_hash"
-remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load -t '$runtime_image' browser-runtime && sudo -n docker save '$runtime_image' | sudo -n k3s ctr -n k8s.io images import -"
+# Runtime tags identify the complete reviewed source set. Preserve an existing
+# exact tag on backend-only deployments, as we already do for agent-runtime.
+# Rebuilding against a moving base image consumes substantial disk and changes
+# runtime bytes without a source/tag change.
+remote "sudo -n docker image inspect '$runtime_image' >/dev/null 2>&1" || \
+  remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load -t '$runtime_image' browser-runtime"
+remote "sudo -n docker save '$runtime_image' | sudo -n k3s ctr -n k8s.io images import -"
 remote "sudo -n k3s ctr -n k8s.io images label '$runtime_image' io.cri-containerd.pinned=pinned >/dev/null"
 echo "runtime_image=$runtime_image"
+"$(dirname "${BASH_SOURCE[0]}")/zoer-browser-worker-runtime.sh" "$runtime_image"
 
 echo "=== [3/6] agent-runtime ==="
 agent_hash="$(cat "$repo_root/agent-runtime/Dockerfile" "$repo_root/backend/src/agent-runners/worker.ts" | shasum -a 256 | cut -c1-16)"
@@ -85,10 +92,45 @@ remote "sudo -n docker save '$agent_image' | sudo -n k3s ctr -n k8s.io images im
 echo "agent_image=$agent_image"
 
 echo "=== [4/6] backend ==="
-remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_BROWSER_RUNTIME_IMAGE=$runtime_image' --build-arg 'ZOER_AGENT_RUNTIME_IMAGE=$agent_image' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f backend/Dockerfile -t 'docker.io/zoer-local/backend:$image_tag' ."
+source_base="${ZOER_BACKEND_SOURCE_BASE_IMAGE:-}"
+reuse_frontend="${ZOER_FRONTEND_REUSE_IMAGE:-}"
+frontend_base="${ZOER_FRONTEND_SOURCE_BASE_IMAGE:-}"
+frontend_dist="${ZOER_FRONTEND_PREBUILT_DIR:-}"
+for image in "$source_base" "$reuse_frontend" "$frontend_base"; do
+  [[ -z "$image" || "$image" =~ ^docker.io/zoer-local/(backend|frontend):[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "Source-only image must be an exact local development tag." >&2; exit 1; }
+done
+if [[ -n "$source_base" ]]; then
+  # Source, built-in skills and reviewed runtime metadata are replaced. Fail closed if dependency/config inputs differ;
+  # The content-tagged runtime image is built/imported above; package changes still require a full build.
+  host_inputs="$(remote "cd '$server_root/source/backend' && sha256sum package.json bun.lock tsconfig.json scripts/fix-agentos-codex-package.mjs")"
+  base_inputs="$(remote "sudo -n docker run --rm --network none --read-only --entrypoint sha256sum '$source_base' package.json bun.lock tsconfig.json scripts/fix-agentos-codex-package.mjs")"
+  [[ "$host_inputs" == "$base_inputs" ]] || { echo "Source-only backend dependency/config inputs differ; use a full build." >&2; exit 1; }
+  source_dockerfile="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/k8s/zoer-local/optional/backend-source-update.Dockerfile"
+  rsync -a -e "$ssh_transport" "$source_dockerfile" "$server_host:$server_root/backend-source-update.Dockerfile"
+  # The daemon-backed builder can resolve this node's existing local image;
+  # isolated builders cannot. This Dockerfile only copies source and runs a
+  # TypeScript check with a 2 GiB Node heap, without dependency/network installs.
+  remote "cd '$server_root/source' && sudo -n docker buildx build --builder default --network none --load --build-arg 'ZOER_BACKEND_BASE_IMAGE=$source_base' --build-arg 'ZOER_AGENT_RUNTIME_IMAGE=$agent_image' --build-arg 'ZOER_BROWSER_RUNTIME_IMAGE=$runtime_image' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f '$server_root/backend-source-update.Dockerfile' -t 'docker.io/zoer-local/backend:$image_tag' ."
+else
+  remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_BROWSER_RUNTIME_IMAGE=$runtime_image' --build-arg 'ZOER_AGENT_RUNTIME_IMAGE=$agent_image' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f backend/Dockerfile -t 'docker.io/zoer-local/backend:$image_tag' ."
+fi
 
 echo "=== [5/6] frontend ==="
-remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f frontend/Dockerfile -t 'docker.io/zoer-local/frontend:$image_tag' ."
+if [[ -n "$frontend_base" ]]; then
+  [[ -z "$reuse_frontend" && -f "$frontend_dist/index.html" ]] || { echo "Choose a prebuilt frontend directory, without frontend reuse." >&2; exit 1; }
+  # Static frontend assets are architecture independent; only the existing
+  # amd64 Nginx image runs on the node. Never install or compile there in this mode.
+  remote "mkdir -p '$server_root/frontend-prebuilt/dist'"
+  rsync -a --delete -e "$ssh_transport" "$frontend_dist/" "$server_host:$server_root/frontend-prebuilt/dist/"
+  rsync -a -e "$ssh_transport" "$repo_root/frontend/nginx.conf.template" "$server_host:$server_root/frontend-prebuilt/nginx.conf.template"
+  frontend_dockerfile="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/k8s/zoer-local/optional/frontend-prebuilt-update.Dockerfile"
+  rsync -a -e "$ssh_transport" "$frontend_dockerfile" "$server_host:$server_root/frontend-prebuilt/Dockerfile"
+  remote "cd '$server_root/frontend-prebuilt' && sudo -n docker buildx build --builder default --network none --load --build-arg 'ZOER_FRONTEND_BASE_IMAGE=$frontend_base' --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -t 'docker.io/zoer-local/frontend:$image_tag' ."
+elif [[ -n "$reuse_frontend" ]]; then
+  remote "sudo -n docker tag '$reuse_frontend' 'docker.io/zoer-local/frontend:$image_tag'"
+else
+  remote "cd '$server_root/source' && sudo -n docker buildx build --builder '$BUILDER' --load --build-arg 'ZOER_GIT_COMMIT=$full_sha' --build-arg 'ZOER_GIT_DIRTY=$git_dirty' -f frontend/Dockerfile -t 'docker.io/zoer-local/frontend:$image_tag' ."
+fi
 
 echo "=== [6/6] import into k3s containerd ==="
 remote "sudo -n docker save 'docker.io/zoer-local/backend:$image_tag' 'docker.io/zoer-local/frontend:$image_tag' | sudo -n k3s ctr -n k8s.io images import -"

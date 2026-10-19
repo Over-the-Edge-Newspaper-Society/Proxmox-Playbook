@@ -3,7 +3,8 @@ set -Eeuo pipefail
 # One command: local code change -> built on the K3s node -> running in the cluster.
 #
 #   ./scripts/zoer-deploy.sh             # build backend+frontend, apply, verify
-#   ./scripts/zoer-deploy.sh --keep 2    # keep N old dev images per component (default 2)
+#   ./scripts/zoer-deploy.sh --keep 2    # keep N older app images per component besides live+rollback (default 2)
+#   ZOER_AUTO_CLEANUP=0 ./scripts/zoer-deploy.sh  # skip the post-deploy image/cache cleanup
 #   ./scripts/zoer-deploy.sh --rollback  # back to the previously deployed images
 #   ./scripts/zoer-deploy.sh --force     # drain but do not wait for running work
 #   ./scripts/zoer-deploy.sh --drain-timeout 900 # seconds to wait for the drain (default 600)
@@ -163,6 +164,18 @@ if [[ "$SKIP_CONVEX" != "1" ]]; then
   fi
 fi
 
+# Keep room for image recovery plus build/import, not just a fixed 15 GiB.
+# A cold build at 92% disk triggered evictions across this shared node.
+read -r capacity_kb available_kb < <(remote "df -Pk / | awk 'NR==2 {print \$2, \$4}'")
+[[ "$capacity_kb" =~ ^[0-9]+$ && "$available_kb" =~ ^[0-9]+$ ]] || { echo "Cannot verify node disk headroom." >&2; exit 1; }
+temporary_kb=$((15 * 1024 * 1024))
+if [[ -n "${ZOER_BACKEND_SOURCE_BASE_IMAGE:-}" && ( -n "${ZOER_FRONTEND_REUSE_IMAGE:-}" || ( -n "${ZOER_FRONTEND_SOURCE_BASE_IMAGE:-}" && -f "${ZOER_FRONTEND_PREBUILT_DIR:-}/index.html" ) ) ]]; then
+  temporary_kb=$((5 * 1024 * 1024))
+fi
+required_kb=$((capacity_kb / 10 + temporary_kb))
+echo "==> node disk available: $((available_kb / 1024 / 1024)) GiB (need 10% reserve plus $((temporary_kb / 1024 / 1024)) GiB)"
+[[ "$available_kb" -ge "$required_kb" ]] || { echo "Insufficient disk headroom; recover space before building. Images and volumes were preserved." >&2; exit 1; }
+
 # Pre-flight: refuse to build when the node has no memory headroom. A build
 # here competes with the workloads it is deploying; starving the node takes out
 # the API server and every app, and recovery needed a hard VM restart.
@@ -188,8 +201,10 @@ echo "==> building on $SERVER_HOST (this takes a while)"
 LOG="$(mktemp)"
 "$HERE/zoer-local-build.sh" | tee "$LOG"
 TAG="$(grep -oE 'BUILD COMPLETE: (.+)' "$LOG" | sed 's/BUILD COMPLETE: //')"
+RUNTIME_IMAGE="$(sed -n 's/^runtime_image=//p' "$LOG" | tail -1)"
 rm -f "$LOG"
 [[ -n "$TAG" ]] || { echo "Build did not report a tag." >&2; exit 1; }
+[[ -z "$RUNTIME_IMAGE" || "$RUNTIME_IMAGE" =~ ^docker.io/zoer-local/browser-runtime:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo 'Build reported an invalid runtime image.' >&2; exit 1; }
 
 # Drain before the rollout (re-checked after the build, which takes many minutes).
 if [[ "$DRAIN" == "1" ]]; then
@@ -229,6 +244,10 @@ echo "==> previous frontend: ${PREV_F:-none}"
 # Backend and frontend share one tag, so replace every newTag line.
 sed -i.bak "s|newTag: .*|newTag: $TAG|g" "$OVERLAY/kustomization.yaml" && rm -f "$OVERLAY/kustomization.yaml.bak"
 kubectl apply -k "$OVERLAY"
+if [[ -n "$RUNTIME_IMAGE" ]]; then
+  # Align both winning overrides with the image already imported on both nodes.
+  kubectl -n "$NS" set env deploy/zoer-backend "BROWSER_RUNTIME_IMAGE=$RUNTIME_IMAGE" "ZOER_DEV_BROWSER_RUNTIME_IMAGE=$RUNTIME_IMAGE"
+fi
 
 # Annotated after apply so kustomize never overwrites it.
 [[ -n "$PREV_B" ]] && kubectl -n "$NS" annotate deploy/zoer-backend  "zoer.previous-image=$PREV_B" --overwrite >/dev/null
@@ -257,26 +276,31 @@ if [[ "$ZM_DRAINED" == "1" ]]; then
   fi
 fi
 
-# Prune per component so backend and frontend are kept independently, and never
-# touch browser-runtime / agent-runtime (content-hash tags the backend still
-# references to launch browsers and agents).
-echo "==> pruning old dev images (keeping $KEEP of each)"
-for c in backend frontend; do
-  remote "sudo -n docker images --format '{{.Repository}}:{{.Tag}}' \
-    | grep '^zoer-local/$c:dev-' | sort -r | tail -n +\$(( $KEEP + 1 )) \
-    | xargs -r -n1 sudo -n docker rmi -f >/dev/null 2>&1 || true"
-  remote "sudo -n k3s ctr -n k8s.io images list -q \
-    | grep '^docker.io/zoer-local/$c:dev-' | grep -v ':$TAG\$' | sort -r | tail -n +\$(( $KEEP + 1 )) \
-    | xargs -r -n1 sudo -n k3s ctr -n k8s.io images rm >/dev/null 2>&1 || true"
-done
-
-# Runtime images are tagged by content hash and referenced by the backend, not
-# by a Deployment, so the per-component prune above cannot touch them safely.
-# This pass reads every backend image's baked-in refs (containerd included) and
-# removes only genuinely unreferenced runtimes.
-echo "==> checking for stale runtime images"
-"$HERE/zoer-prune-runtimes.sh" ${ZOER_PRUNE_RUNTIMES:+--apply} || true
-[[ -z "${ZOER_PRUNE_RUNTIMES:-}" ]] && echo "    (dry run; set ZOER_PRUNE_RUNTIMES=1 to remove them automatically)"
+# Automatic cleanup after a successful rollout. Opt out with
+# ZOER_AUTO_CLEANUP=0 (or the individual switches below).
+# 1. App images: every backend/frontend tag (dev-* and hand-named builds) in
+#    Docker and containerd, keeping what runs, the --rollback image, builds
+#    from the last 3h and the $KEEP newest of the rest.
+# 2. Runtime images: browser/agent runtimes no remaining backend image or pod
+#    references. Must run after (1), which drops the old backends that pinned them.
+# 3. Build cache older than a day in the default builder (source-only builds);
+#    the capped builders keep theirs for full builds.
+if [[ "${ZOER_AUTO_CLEANUP:-1}" != "0" ]]; then
+  if [[ "${ZOER_PRUNE_APP_IMAGES:-1}" != "0" ]]; then
+    echo "==> pruning old backend/frontend images (keeping in-use, rollback and $KEEP newest of each)"
+    "$HERE/zoer-prune-app-images.sh" --keep "$KEEP" --apply || echo "!! app image prune failed (deploy itself succeeded)" >&2
+  fi
+  if [[ "${ZOER_PRUNE_RUNTIMES:-1}" != "0" ]]; then
+    echo "==> pruning stale runtime images"
+    "$HERE/zoer-prune-runtimes.sh" --apply || echo "!! runtime image prune failed (deploy itself succeeded)" >&2
+  fi
+  echo "==> trimming day-old build cache"
+  remote "sudo -n docker buildx prune --builder default -f --filter until=24h >/dev/null 2>&1 || true"
+else
+  echo "==> automatic cleanup skipped (ZOER_AUTO_CLEANUP=0); dry runs:"
+  "$HERE/zoer-prune-app-images.sh" --keep "$KEEP" || true
+  "$HERE/zoer-prune-runtimes.sh" || true
+fi
 
 echo
 echo "backend : $(image_of zoer-backend)"

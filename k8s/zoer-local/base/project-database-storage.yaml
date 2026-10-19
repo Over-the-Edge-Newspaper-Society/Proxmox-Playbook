@@ -1,0 +1,12 @@
+# Project database metadata uses SQLite and must not live on backend-data (NFS).
+# Preserve this claim across application upgrades and image rollbacks.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zoer-project-databases
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

@@ -37,6 +37,8 @@ spec:
               value: America/Vancouver
             - name: LOG_LEVEL
               value: info
+            - name: PROJECT_DATABASE_DIR
+              value: /project-databases
             - name: NODE_EXTRA_CA_CERTS
               value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             - name: AI_BASE_URL
@@ -53,6 +55,8 @@ spec:
               value: ghcr.io/ahzs645/zoer/computer:main-1786604169-12a554e-full # {"$imagepolicy": "flux-system:zoer-computer"}
             - name: K8S_IMAGE_PULL_POLICY
               value: IfNotPresent
+            - name: PLAYWRIGHT_WORKER_NODE
+              value: zoer-browser-worker-1
             - name: PLUGIN_RUNNER_MODE
               value: kubernetes
             - name: PLUGIN_RUNNER_CONTAINER_IMAGE
@@ -73,6 +77,9 @@ spec:
               value: wp.k8s.overtheedgepaper.ca
             - name: SITES_MANAGER_DOMAIN
               value: sites.k8s.overtheedgepaper.ca
+            # T3 Code hosts on Zoer computers (see t3code-hosts.yaml).
+            - name: T3CODE_HOST_DOMAIN
+              value: t3.k8s.overtheedgepaper.ca
             # Development mode: open access, no login. Paired with
             # DEV_ALLOW_PASSWORDLESS_GITHUB below, anyone who can reach this
             # instance has full workspace + GitHub account access.
@@ -118,6 +125,8 @@ spec:
           volumeMounts:
             - name: backend-data
               mountPath: /data
+            - name: project-databases
+              mountPath: /project-databases
           readinessProbe:
             httpGet:
               path: /api/health
@@ -139,6 +148,9 @@ spec:
         - name: backend-data
           persistentVolumeClaim:
             claimName: zoer-backend-data
+        - name: project-databases
+          persistentVolumeClaim:
+            claimName: zoer-project-databases
 ---
 apiVersion: v1
 kind: Service

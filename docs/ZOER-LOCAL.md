@@ -80,6 +80,23 @@ Credentials are passed through private temporary files and stdin, never printed 
 
 Managed previews also require `k8s/zoer-local/base/wordpress-domains.yaml`, included in the deployment overlay. It routes `wp.k8s.overtheedgepaper.ca` to the manager and `*.wp.k8s.overtheedgepaper.ca` directly to the backend's existing site proxy. The installed `letsencrypt-cloudflare` issuer provides the matching certificate: the parent `*.k8s.overtheedgepaper.ca` certificate does not cover site subdomains. UniFi DNS resolves these names to the existing private Traefik address; this does not publish the bridge or add public DNS records. Verify the certificate is Ready before creating a copy, whose final check uses trusted HTTPS.
 
+## Project database storage
+
+The base manifests include `project-database-storage.yaml`: a dedicated 5 GiB
+`local-path` claim mounted at `/project-databases`, selected by
+`PROJECT_DATABASE_DIR`. The existing `/data` volume is NFS and cannot host
+SQLite project databases. Keep the dedicated claim, mount and environment
+variable through application upgrades and image rollbacks. This is single-node
+persistence; back up user-created databases to separate private storage.
+
+Mounting the volume enables the setup panel but does not create a project
+database. The user must complete **Databases → Project database → choose project
+→ Create project database → Create database**. A configuration-only repair can
+retain the live application images and apply only the new claim and backend
+mount/environment entries, using the maintenance drain and resume sequence below
+around the backend restart. Do not apply the entire overlay for a narrow repair
+when other live configuration or working-tree changes are unrelated.
+
 ## Build and deploy
 
 ```bash
@@ -161,8 +178,13 @@ migration of an occupied catalog.
   the backend only pulls it when an agent starts.
 - **Records the previous images** as the `zoer.previous-image` annotation before
   applying, and reverts automatically if either rollout fails.
-- **Prunes per component**, never touching `browser-runtime` or `agent-runtime`
-  — those carry content-hash tags the backend still references.
+- **Cleans up automatically after a successful rollout** (`ZOER_AUTO_CLEANUP=0` opts out):
+  `zoer-prune-app-images.sh --apply` removes old backend/frontend images under any tag (dev-*
+  and hand-named builds alike) from Docker and containerd, keeping what runs, the
+  `zoer.previous-image` rollback target, builds from the last 3h and the `--keep` newest of the
+  rest; then `zoer-prune-runtimes.sh --apply` removes browser/agent runtimes no remaining backend
+  image or pod references; then day-old default-builder cache is trimmed. Before this, named builds
+  were never pruned and pinned their runtimes, so the node reached 93% on 2026-10-17.
 - **Excludes generated artifacts.** `output/` alone is ~689 MB across 49k files
   and was previously rsynced into the build context on every build; it is now in
   `.gitignore`, `.dockerignore` and the rsync excludes.
@@ -292,10 +314,15 @@ in-place ConfigMap edit does not restart pods.
 
 ## Known gaps
 
-**AI calls fail.** `AI_BASE_URL` is `http://192.168.1.51:11434/v1`, an AI VM on
-the retired `192.168.1.0/24` network that no longer exists. The backend starts
-fine (`AI_API_KEY` falls back to `"ollama"`), but model calls cannot connect.
-Point it at a reachable endpoint.
+**The inherited hosted AI profile is unreachable.** `AI_BASE_URL` is
+`http://192.168.1.51:11434/v1`, an endpoint from the other environment.
+Hosted requests using that profile cannot connect. Installed CLI chats use
+the selected computer's authenticated runtime instead; they do not need this
+HTTP endpoint. The user selected `WordPress live testing`
+(`zoer-wordpress-live-testing-muvgqg7j`) as the default computer on 2026-10-05.
+It has authenticated Claude Code with a Claude Max subscription. Preserve the
+hosted profile until an intended OTE replacement is specified; setting a
+default computer does not convert hosted-only plugin actions to CLI actions.
 
 **Two manifests are excluded.** `wordpress-domains.yaml` and
 `sites-domains.yaml` from the upstream repo declare cert-manager `Certificate`
@@ -312,3 +339,96 @@ or existing encrypted data becomes unreadable.
 That repo is the Flux GitOps source for production Zoer and was deliberately
 left untouched — editing it could alter production on the next reconcile.
 Upstream changes do not flow here automatically.
+
+## Inspected backend source-only updates
+
+For a backend/src-only change with unchanged dependencies, shared packages,
+configuration and frontend source, explicitly set
+`ZOER_BACKEND_SOURCE_BASE_IMAGE` and `ZOER_FRONTEND_REUSE_IMAGE` to the exact
+currently deployed local development tags before running `zoer-deploy.sh`.
+The helper compares backend dependency/config hashes, reuses source-tagged
+runtime images and the unchanged frontend, copies backend/src and typechecks it
+with a 3 GiB Node heap and core dumps disabled. It uses the daemon-backed builder
+to resolve the node's existing local image; this opt-in path has no package or
+network installs. Review shared-package/frontend equality separately; those
+inputs are not replaced by this path. The normal maintenance drain, rollout,
+previous-image receipt and health checks remain in use. Keep two generations for
+rollback. Use a full capped build for dependency, shared-package, configuration,
+runtime or frontend changes. Do not infer source-only safety from Git revision
+alone when either checkout/image contains uncommitted changes.
+
+Deployment now reserves 10% of the filesystem plus 15 GiB for normal builds, or
+5 GiB for an explicitly inspected source-only update. Passing a memory gate does
+not establish disk safety. Allow image recovery to finish and verify DiskPressure
+has cleared before building; image GC/pulls can consume headroom again. Preserve
+application images, runtime references and storage when clearing abandoned cache.
+
+
+### Source update with locally compiled frontend
+
+After local frontend install, TypeScript check and production build, a small
+source-only rollout can combine the backend's cached dependencies with prebuilt
+frontend assets. Review that the base images match the runtime/dependencies and
+that the supplied `dist` contains the current frontend source and build identity.
+Use the same `VITE_ZOER_GIT_COMMIT`/`VITE_ZOER_GIT_DIRTY` values as the image build.
+
+```sh
+ZOER_BUILD_MEM=4g \
+ZOER_BACKEND_SOURCE_BASE_IMAGE=EXISTING_LOCAL_BACKEND_IMAGE \
+ZOER_FRONTEND_SOURCE_BASE_IMAGE=EXISTING_LOCAL_FRONTEND_IMAGE \
+ZOER_FRONTEND_PREBUILT_DIR=/absolute/path/to/zoer/frontend/dist \
+./scripts/zoer-deploy.sh --skip-convex --keep 2
+```
+
+This mode retains the 10% filesystem reserve plus 5 GiB temporary-space guard.
+It copies static assets and the current Nginx template into the existing amd64
+frontend base, removes old static files, and performs no frontend compilation or
+package installation on the shared node. Do not combine it with frontend reuse.
+Normal full builds retain the larger 15 GiB temporary-space requirement. Neither
+mode removes computer/site/project storage or deploys Convex functions when
+`--skip-convex` is supplied.
+
+
+## Small browser-only worker
+
+`./scripts/zoer-browser-worker-create.sh` creates the dedicated browser VM from
+the existing Ubuntu cloud-init template, with 3 GiB fixed RAM, 2 vCPU and a 32 GiB
+disk. It checks host memory first, retains an existing matching VM on reruns,
+and uses DHCP. `./scripts/zoer-browser-worker-join.sh` discovers that VM through
+the Proxmox guest agent, verifies its SSH public host key through the same trusted
+channel, joins the existing pinned K3s version, and preserves an active agent on
+reruns. The browser node has a NoSchedule taint; the local-path provisioner's
+storage helper receives its narrow matching toleration. Tokens remain in private
+files; scripts must never print them or disable host-key checking.
+
+The backend manifest opts new compact stock Playwright workers into
+`PLAYWRIGHT_WORKER_NODE=zoer-browser-worker-1`. Those workers reserve/limit 2 GiB
+and admit at most two isolated browser processes, including the warm spare.
+Existing saved browser workers/volumes retain their original node and slot policy.
+Global browser settings count all nodes and preserve budgets needed by existing
+specialized profiles. Alternate engines require an explicit profile/provider
+choice; they are not fallback engines for ordinary chat preparation.
+
+Before first enabling the backend setting, import and pin the exact selected
+runtime on the browser node with
+`./scripts/zoer-browser-worker-runtime.sh docker.io/zoer-local/browser-runtime:EXACT_TAG`.
+The normal local build now runs this helper after building the runtime. It validates
+the configured node/VM address, checks browser-node disk reserve, streams only
+from the trusted build host, and retains existing profiles and images. The normal
+deploy aligns both backend runtime overrides with that imported image after
+applying its manifests, within the maintenance drain. An unavailable browser
+node or insufficient image space aborts the build/deploy path. Reviewed runtime
+updates stored on a local-path PVC still need storage compatible with their
+selected node; they must not be silently moved to the application host.
+
+This provisions a private Kubernetes worker, without a new public browser/CDP
+endpoint. No Proxmox-host reboot or GPU/UMA change is needed for the small pilot.
+Check host memory pressure as well as both guest working sets; guest available
+RAM is not automatically available to another VM. Keep actual node addresses,
+image tags, workload qualifications and measurements in the dated ui-audit.
+
+## Reconciled operator tooling (2026-10-19)
+
+The source-only backend path now refreshes shared API type source and Convex function references as well as backend source. It propagates the checked browser and agent runtime tags. Dependency/config changes still require a full build. Source-only TypeScript has a 2 GiB Node heap; keep at least 1.5 GiB additional node memory free (`ZOER_BUILD_MEM=2048m` uses the matching 3584 MiB preflight). The check refuses the rollout if capacity is below that budget. Prebuilt frontend assets are built locally with the exact source revision; the node uses the existing Nginx image.
+
+Deployment, drain/resume, browser-worker, SSH and sandbox operator scripts and their tests are versioned here. Optional SSH provisioning is explicit; committing these scripts does not enable remote access. Do not commit operator `output/` or private credential files. App/runtime pruning protects running and rollback references and does not remove site volumes. Set `ZOER_AUTO_CLEANUP=0` to preserve caches and all image candidates during a release.

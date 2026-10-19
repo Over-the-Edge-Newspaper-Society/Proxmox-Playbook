@@ -102,12 +102,13 @@ if [[ "$APPLY" != "1" ]]; then
 fi
 
 echo "==> removing"
+# ssh reads stdin; without </dev/null the first call swallows the rest of the list.
 while read -r img; do
   [[ -n "$img" ]] || continue
-  remote "sudo -n docker rmi -f '$img' >/dev/null 2>&1 || true"
+  remote "sudo -n docker rmi -f '$img' >/dev/null 2>&1 || true" </dev/null
   # The pin must be cleared before containerd will drop it.
-  remote "sudo -n k3s ctr -n k8s.io images label 'docker.io/$img' io.cri-containerd.pinned= >/dev/null 2>&1 || true"
-  remote "sudo -n k3s ctr -n k8s.io images rm 'docker.io/$img' >/dev/null 2>&1 || true"
+  remote "sudo -n k3s ctr -n k8s.io images label 'docker.io/$img' io.cri-containerd.pinned= >/dev/null 2>&1 || true" </dev/null
+  remote "sudo -n k3s ctr -n k8s.io images rm 'docker.io/$img' >/dev/null 2>&1 || true" </dev/null
   echo "     removed $img"
 done <<< "$stale"
 remote "df -h / | tail -1" | sed 's/^/node disk: /'

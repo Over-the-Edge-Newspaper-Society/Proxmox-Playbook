@@ -113,7 +113,7 @@ case " $* " in
 esac
 exit 0
 '''
-SSH = '#!/usr/bin/env bash\necho "ssh ${*: -1}" >> "$TEST_ROOT/calls"\n[[ "$*" == *"free -m"* ]] && echo 99999\nexit 0\n'
+SSH = '#!/usr/bin/env bash\necho "ssh ${*: -1}" >> "$TEST_ROOT/calls"\n[[ "$*" == *"df -Pk /"* ]] && echo "262144000 104857600"\n[[ "$*" == *"free -m"* ]] && echo 99999\nexit 0\n'
 CURL = '#!/usr/bin/env bash\nprintf 200\n'
 
 
@@ -228,6 +228,16 @@ class DeployTests(Base):
 
 
 class DeployOk(DeployTests):
+    def test_imported_runtime_overrides_are_aligned_before_rollout(self):
+        build = self.root / 'repo/scripts/zoer-local-build.sh'
+        build.write_text('#!/usr/bin/env bash\necho "runtime_image=docker.io/zoer-local/browser-runtime:fixture"\necho "BUILD COMPLETE: dev-test"\n')
+        rc, out, err, calls = self.deploy()
+        self.assertEqual(rc, 0, out + err)
+        command = 'set env deploy/zoer-backend BROWSER_RUNTIME_IMAGE=docker.io/zoer-local/browser-runtime:fixture ZOER_DEV_BROWSER_RUNTIME_IMAGE=docker.io/zoer-local/browser-runtime:fixture'
+        self.assertIn(command, calls)
+        self.assertLess(calls.index('apply -k'), calls.index(command))
+        self.assertLess(calls.index(command), calls.index('rollout status'))
+
     def test_happy_path_order(self):
         rc, out, err, calls = self.deploy()
         self.assertEqual(rc, 0, out + err)
