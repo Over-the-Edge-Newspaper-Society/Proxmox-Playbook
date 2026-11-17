@@ -1,0 +1,12 @@
+# Updating Kitesurf on OTE
+
+This overlay owns the Kitesurf Deployment, internal Service and two NetworkPolicies. It is applied independently of the Zoer application overlay. The initial base comes from Zoer commit `3f0d6777`, and the original short image tag identifies upstream commit `4a2903813a22b08d4f3cc64a4b35339d0293a5d1`.
+
+1. Compare the deployed commit with Cloudflare's Kitesurf repository. Select a full upstream commit SHA and review changes to the engine, build, CDP and runtime requirements.
+2. On a separate amd64 builder with sufficient space for Bazel, use the existing Zoer checkout's build recipe. Set `KITESURF_COMMIT` to the full SHA, `PLATFORM=linux/amd64` and `TAG=zoer-kitesurf:$KITESURF_COMMIT` before running `kitesurf-engine/build.sh`. Keep the linked source checkout disposable. Record the upstream SHA, packaging revision and image digest. If repackaging the same SHA, give the image a new tag.
+3. Import the image into k3s containerd on each eligible application node and pin it. Preserve the currently running image for rollback. Check the image architecture, available disk and scheduling headroom for the replacement pod. The Deployment uses `imagePullPolicy: Never`.
+4. Change only `images[0].newTag` in this overlay. With the OTE kubeconfig selected, run `kubectl diff -k k8s/zoer-kitesurf`. During a quiet window apply with `kubectl apply -k k8s/zoer-kitesurf`, then run `kubectl -n zoer rollout status deploy/zoer-kitesurf --timeout=5m`. Closing open viewers before promotion avoids interrupting their session.
+5. In Zoer's Web Scraping setup, run a public JavaScript render with a required selector. Open the interactive viewer, check the first frame, click a link, scroll, type, and close it. Verify readiness and memory under the normal mix of pages and concurrency. Record which checks passed.
+6. If the release fails, restore the previous tag and apply this same overlay. Wait for readiness and repeat the render check. The service address stays stable through an engine update.
+
+Steel and the native Playwright, Patchright, Camoufox and Clearcote engines have separate reviewed updates in Zoer's Browsers view. Browserbase owns its hosted engine. Cloak uses CloakBrowser Manager. Selecting a new default for future launches and moving an existing saved profile to another runtime are separate operations.

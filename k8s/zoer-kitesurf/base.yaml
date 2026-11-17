@@ -1,0 +1,95 @@
+# Self-hosted Kitesurf engine for Zoer's optional page renderer (docs/kitesurf.md).
+# Cluster-internal only: the engine has no authentication, so there is no Ingress and a
+# NetworkPolicy admits only the Zoer backend. Point Zoer at
+#   ws://zoer-kitesurf.zoer.svc.cluster.local:8787/devtools/browser
+# (Scraping → Setup → Kitesurf rendering → Self-hosted engine).
+#
+# Build for the cluster's architecture and import the image on the node that runs it, e.g.:
+#   PLATFORM=linux/amd64 TAG=zoer-kitesurf:4a29038 kitesurf-engine/build.sh
+#   docker save zoer-kitesurf:4a29038 | gzip -1 | ssh <node> 'gunzip | sudo k3s ctr images import -'
+# Without a toleration it runs on an untainted (application) node. To move it to a tainted
+# browser-worker node, import the image there first, then add:
+#   nodeSelector: { zoer.io/browser-worker: "true" }
+#   tolerations: [{ key: zoer.io/browser-worker, operator: Equal, value: "true", effect: NoSchedule }]
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoer-kitesurf
+  namespace: zoer
+  labels: { app: zoer-kitesurf }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: zoer-kitesurf }
+  template:
+    metadata:
+      labels: { app: zoer-kitesurf }
+    spec:
+      automountServiceAccountToken: false
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: engine
+          image: zoer-kitesurf:4a29038
+          imagePullPolicy: Never
+          ports: [{ name: cdp, containerPort: 8787 }]
+          # Measured locally: ~720 MiB idle, ~1.2 GiB after a few hundred pages.
+          resources:
+            requests: { cpu: 100m, memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          readinessProbe:
+            httpGet: { path: /health, port: cdp }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: cdp }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoer-kitesurf
+  namespace: zoer
+spec:
+  type: ClusterIP
+  selector: { app: zoer-kitesurf }
+  ports: [{ name: cdp, port: 8787, targetPort: cdp }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zoer-kitesurf-backend-only
+  namespace: zoer
+spec:
+  podSelector:
+    matchLabels: { app: zoer-kitesurf }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: zoer-backend }
+      ports: [{ port: 8787, protocol: TCP }]
+---
+# Pages may request anything they like; keep them off the cluster and LAN. The engine also
+# refuses private addresses itself (global_fetch_strictly_public, KITESURF_ALLOW_PRIVATE_NETWORK
+# unset) and Zoer checks every page and redirect before using its content.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zoer-kitesurf-public-egress
+  namespace: zoer
+spec:
+  podSelector:
+    matchLabels: { app: zoer-kitesurf }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, 127.0.0.0/8]
+      ports: [{ port: 80, protocol: TCP }, { port: 443, protocol: TCP }]
