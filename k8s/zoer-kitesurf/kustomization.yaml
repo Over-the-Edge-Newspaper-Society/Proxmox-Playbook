@@ -6,3 +6,28 @@ resources:
 images:
   - name: zoer-kitesurf
     newTag: 4a29038
+patches:
+  - target:
+      kind: Deployment
+      name: zoer-kitesurf
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 1536Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 3Gi
+      # A busy renderer can take the full 60-second page deadline. Keep its
+      # service endpoint through transient health delays during that request.
+      - op: add
+        path: /spec/template/spec/containers/0/readinessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/readinessProbe/failureThreshold
+        value: 8
+      - op: add
+        path: /spec/template/spec/containers/0/livenessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/livenessProbe/failureThreshold
+        value: 4

@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: zoer-browser-prestart-open
+    spec:
+      schedule: "0 8 * * 1-5"
+      timeZone: America/Vancouver
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 600
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 1
+      jobTemplate:
+        spec:
+          activeDeadlineSeconds: 90
+          backoffLimit: 1
+          template:
+            metadata:
+              labels: { zoer.io/prestart: "true" }
+            spec: &pod
+              restartPolicy: Never
+              automountServiceAccountToken: false
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                seccompProfile: { type: RuntimeDefault }
+              containers:
+                - name: set-prestart
+                  # Same pinned image as OTE's gateway. Use its packaged curl.
+                  image: docker.io/library/nginx@sha256:516475cc129da42866742567714ddc681e5eed7b9ee0b9e9c015e464b4221a00
+                  imagePullPolicy: IfNotPresent
+                  command: [sh, -ec]
+                  args:
+                    - |
+                      case "$PRESTART" in true|false) ;; *) exit 2 ;; esac
+                      curl --fail --silent --show-error --max-time 15 --retry 2 \
+                        -X PUT -H 'Content-Type: application/json' \
+                        --data "{\"prestart\":$PRESTART}" \
+                        http://zoer-backend:4000/api/browser-resources/preferences |
+                        grep -F "\"prestart\":$PRESTART"
+                  env:
+                    - name: PRESTART
+                      valueFrom:
+                        fieldRef: { fieldPath: "metadata.labels['zoer.io/prestart']" }
+                  resources:
+                    requests: { cpu: 5m, memory: 4Mi }
+                    limits: { cpu: 100m, memory: 24Mi }
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: true
+                    capabilities: { drop: [ALL] }
+  - apiVersion: batch/v1
+    kind: CronJob
+    metadata:
+      name: zoer-browser-prestart-close
+    spec:
+      schedule: "0 18 * * 1-5"
+      timeZone: America/Vancouver
+      concurrencyPolicy: Forbid
+      startingDeadlineSeconds: 600
+      successfulJobsHistoryLimit: 1
+      failedJobsHistoryLimit: 1
+      jobTemplate:
+        spec:
+          activeDeadlineSeconds: 90
+          backoffLimit: 1
+          template:
+            metadata:
+              labels: { zoer.io/prestart: "false" }
+            spec: *pod
