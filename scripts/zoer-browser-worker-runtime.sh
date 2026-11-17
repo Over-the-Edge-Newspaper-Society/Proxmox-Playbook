@@ -29,10 +29,19 @@ PY
 worker_args=("${ssh_args[@]}" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$work/known_hosts")
 if ! ssh "${worker_args[@]}" "ubuntu@$ip" 'sudo k3s ctr images ls -q' | grep -Fx "$image" >/dev/null; then
   read -r available capacity < <(ssh "${worker_args[@]}" "ubuntu@$ip" "df -Pk / | awk 'NR==2 {print \$4,\$2}'")
-  size="$(ssh "${ssh_args[@]}" "$server" "sudo docker image inspect '$image' --format '{{.Size}}'")"
+  # The runtime may be held only by containerd, whose reported size is compressed.
+  if ssh "${ssh_args[@]}" "$server" "sudo docker image inspect '$image' >/dev/null 2>&1"; then
+    size="$(ssh "${ssh_args[@]}" "$server" "sudo docker image inspect '$image' --format '{{.Size}}'")"
+    export_command="sudo docker save '$image'"
+  else
+    size="$(ssh "${ssh_args[@]}" "$server" "sudo k3s crictl inspecti -o go-template --template '{{.status.size}}' '$image'")"
+    [[ "$size" =~ ^[0-9]+$ ]] || exit 1
+    size=$((size * 3))
+    export_command="sudo k3s ctr -n k8s.io images export - '$image'"
+  fi
   [[ "$size" =~ ^[0-9]+$ && "$available" =~ ^[0-9]+$ && "$capacity" =~ ^[0-9]+$ ]] || exit 1
   (( available > capacity / 10 + 2 * size / 1024 + 1048576 )) || { echo 'Insufficient browser-node disk reserve; preserve profiles and referenced images.'; exit 1; }
-  ssh "${ssh_args[@]}" "$server" "sudo docker save '$image' | gzip -1" |
+  ssh "${ssh_args[@]}" "$server" "$export_command | gzip -1" |
     ssh "${worker_args[@]}" "ubuntu@$ip" 'gzip -d | sudo k3s ctr images import --no-unpack -'
 fi
 ssh "${worker_args[@]}" "ubuntu@$ip" "sudo k3s ctr images label '$image' io.cri-containerd.pinned=pinned >/dev/null"

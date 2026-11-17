@@ -8,15 +8,25 @@ ENV ZOER_GIT_COMMIT=${ZOER_GIT_COMMIT}
 ENV ZOER_GIT_DIRTY=${ZOER_GIT_DIRTY}
 LABEL org.opencontainers.image.revision=${ZOER_GIT_COMMIT}
 LABEL sh.zoer.git.dirty=${ZOER_GIT_DIRTY}
-COPY packages/api-types /app/packages/api-types
 COPY convex /app/convex
 COPY backend/src /app/backend/src
 COPY backend/skills /app/backend/skills
+# The Python scraper (scrape.py) runs from here with the base image's /opt/zoer-scraper venv.
+COPY backend/scripts /app/backend/scripts
+RUN /opt/zoer-scraper/bin/python -c 'import ast,sys; ast.parse(open("/app/backend/scripts/scrape.py").read())'
+COPY sdk/packages/api-types/src /app/sdk/packages/api-types/src
+COPY sdk/packages/plugin-contracts/src /app/sdk/packages/plugin-contracts/src
 COPY browser-runtime /app/browser-runtime
 ARG ZOER_BROWSER_RUNTIME_IMAGE
 ENV BROWSER_RUNTIME_IMAGE=${ZOER_BROWSER_RUNTIME_IMAGE}
 ENV ZOER_DEV_BROWSER_RUNTIME_IMAGE=${ZOER_BROWSER_RUNTIME_IMAGE}
 ARG ZOER_AGENT_RUNTIME_IMAGE
+ENV AGENT_RUNNER_IMAGE=${ZOER_AGENT_RUNTIME_IMAGE}
 ENV AGENT_RUNTIME_IMAGE=${ZOER_AGENT_RUNTIME_IMAGE}
 ENV ZOER_DEV_AGENT_RUNTIME_IMAGE=${ZOER_AGENT_RUNTIME_IMAGE}
-RUN ulimit -c 0 && NODE_OPTIONS=--max-old-space-size=2048 bun x tsc --noEmit
+ARG ZOER_BUILD_RUNNER_IMAGE
+ENV ZOER_BUILD_RUNNER_IMAGE=${ZOER_BUILD_RUNNER_IMAGE}
+ARG ZOER_SOURCE_NODE_HEAP_MB=3072
+ARG ZOER_SOURCE_PRECHECK_SHA256
+LABEL sh.zoer.source-typecheck.sha256=${ZOER_SOURCE_PRECHECK_SHA256}
+RUN if [ -z "$ZOER_SOURCE_PRECHECK_SHA256" ]; then ulimit -c 0 && NODE_OPTIONS=--max-old-space-size=${ZOER_SOURCE_NODE_HEAP_MB} bun x tsc --noEmit; fi

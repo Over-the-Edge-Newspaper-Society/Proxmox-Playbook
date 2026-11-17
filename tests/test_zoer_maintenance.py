@@ -238,6 +238,19 @@ class DeployOk(DeployTests):
         self.assertLess(calls.index('apply -k'), calls.index(command))
         self.assertLess(calls.index(command), calls.index('rollout status'))
 
+    def test_docker_copies_are_dropped_only_after_rollout(self):
+        rc, out, err, calls = self.deploy()
+        self.assertEqual(rc, 0, out + err)
+        self.assertLess(calls.index('rollout status'), calls.index('zoer-local/(backend|frontend|browser-runtime):'))
+        self.assertNotIn('agent-runtime|', calls.split('rollout status')[-1].split('held=')[-1])
+
+    def test_failed_build_reports_and_deploys_nothing(self):
+        (self.root / 'repo/scripts/zoer-local-build.sh').write_text('#!/usr/bin/env bash\nexit 1\n')
+        rc, out, err, calls = self.deploy()
+        self.assertEqual(rc, 1)
+        self.assertIn('build failed - nothing was deployed', err)
+        self.assertNotIn('apply -k', calls)
+
     def test_happy_path_order(self):
         rc, out, err, calls = self.deploy()
         self.assertEqual(rc, 0, out + err)

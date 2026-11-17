@@ -147,7 +147,7 @@ ZOER_DDEV_DEFER_ROLLOUT=1 "$HERE/zoer-setup-ddev.sh"
 # them. Idempotent and quick, so it runs every time.
 if [[ "$SKIP_CONVEX" != "1" ]]; then
   echo "==> deploying Convex functions"
-  ZPOD="$(kubectl -n "$NS" get pod -l app=zoer-convex -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+  ZPOD="$(kubectl -n "$NS" get pod -l app=zoer-convex --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
   if [[ -n "$ZPOD" ]]; then
     ZKEY="$(kubectl -n "$NS" exec "$ZPOD" -- sh -c 'cd /convex && ./generate_admin_key.sh' 2>/dev/null \
             | grep -oE '[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+' | tail -1)"
@@ -171,6 +171,8 @@ read -r capacity_kb available_kb < <(remote "df -Pk / | awk 'NR==2 {print \$2, \
 temporary_kb=$((15 * 1024 * 1024))
 if [[ -n "${ZOER_BACKEND_SOURCE_BASE_IMAGE:-}" && ( -n "${ZOER_FRONTEND_REUSE_IMAGE:-}" || ( -n "${ZOER_FRONTEND_SOURCE_BASE_IMAGE:-}" && -f "${ZOER_FRONTEND_PREBUILT_DIR:-}/index.html" ) ) ]]; then
   temporary_kb=$((5 * 1024 * 1024))
+  # A base image that is only in containerd is loaded into Docker first, about 12 GiB.
+  remote "sudo -n docker image inspect '$ZOER_BACKEND_SOURCE_BASE_IMAGE' >/dev/null 2>&1" || temporary_kb=$((15 * 1024 * 1024))
 fi
 required_kb=$((capacity_kb / 10 + temporary_kb))
 echo "==> node disk available: $((available_kb / 1024 / 1024)) GiB (need 10% reserve plus $((temporary_kb / 1024 / 1024)) GiB)"
@@ -199,7 +201,12 @@ fi
 
 echo "==> building on $SERVER_HOST (this takes a while)"
 LOG="$(mktemp)"
-"$HERE/zoer-local-build.sh" | tee "$LOG"
+if ! "$HERE/zoer-local-build.sh" | tee "$LOG"; then
+  rm -f "$LOG"
+  echo "!! build failed - nothing was deployed. Anything it built stays until the next successful deploy's cleanup." >&2
+  remote "df -h / | tail -1" | sed 's/^/node disk: /' >&2 || true
+  exit 1
+fi
 TAG="$(grep -oE 'BUILD COMPLETE: (.+)' "$LOG" | sed 's/BUILD COMPLETE: //')"
 RUNTIME_IMAGE="$(sed -n 's/^runtime_image=//p' "$LOG" | tail -1)"
 rm -f "$LOG"
@@ -285,6 +292,9 @@ fi
 #    references. Must run after (1), which drops the old backends that pinned them.
 # 3. Build cache older than a day in the default builder (source-only builds);
 #    the capped builders keep theirs for full builds.
+# 4. Docker copies of app and browser-runtime images containerd already holds.
+#    They are large, and a source-only build reloads its base when it needs one.
+#    agent-runtime and build-runner copies stay as small recovery images.
 if [[ "${ZOER_AUTO_CLEANUP:-1}" != "0" ]]; then
   if [[ "${ZOER_PRUNE_APP_IMAGES:-1}" != "0" ]]; then
     echo "==> pruning old backend/frontend images (keeping in-use, rollback and $KEEP newest of each)"
@@ -296,6 +306,11 @@ if [[ "${ZOER_AUTO_CLEANUP:-1}" != "0" ]]; then
   fi
   echo "==> trimming day-old build cache"
   remote "sudo -n docker buildx prune --builder default -f --filter until=24h >/dev/null 2>&1 || true"
+  echo "==> dropping Docker copies of images containerd holds"
+  remote 'held="$(sudo -n k3s ctr -n k8s.io images ls -q)"; [[ -n "$held" ]] || exit 0
+          for ref in $(sudo -n docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "^zoer-local/(backend|frontend|browser-runtime):" || true); do
+            if grep -Fxq "docker.io/$ref" <<<"$held"; then sudo -n docker image rm "$ref" >/dev/null 2>&1 || true; fi
+          done' || echo "!! Docker copy cleanup failed (deploy itself succeeded)" >&2
 else
   echo "==> automatic cleanup skipped (ZOER_AUTO_CLEANUP=0); dry runs:"
   "$HERE/zoer-prune-app-images.sh" --keep "$KEEP" || true

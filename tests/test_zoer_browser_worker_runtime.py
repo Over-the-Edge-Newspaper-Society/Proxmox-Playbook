@@ -18,7 +18,11 @@ if 'network-get-interfaces' in cmd:
 elif 'qm guest exec' in cmd: print(json.dumps({'exitcode':0,'out-data':'ssh-ed25519 fixture-key\\n'}))
 elif 'images ls -q' in cmd: print(os.environ['FIXTURE_IMAGE'] if mode=='cached' else '')
 elif 'df -Pk /' in cmd: print('1 30000000' if mode=='full' else '25000000 30000000')
-elif 'docker image inspect' in cmd: print('3000000000')
+elif 'docker image inspect' in cmd:
+ if mode=='containerd-only': raise SystemExit(1)
+ print('3000000000')
+elif 'crictl inspecti' in cmd: print('1000000000')
+elif 'images export' in cmd: sys.stdout.buffer.write(gzip.compress(b'fixture-archive'))
 elif 'docker save' in cmd: sys.stdout.buffer.write(gzip.compress(b'fixture-archive'))
 elif 'gzip -d' in cmd:
  assert gzip.decompress(sys.stdin.buffer.read())==b'fixture-archive'
@@ -53,6 +57,13 @@ class RuntimeDistributionTests(unittest.TestCase):
         self.assertIn('docker save',calls)
         self.assertIn('images import --no-unpack',calls)
         self.assertLess(calls.index('images import'),calls.index('images label'))
+
+    def test_runtime_held_only_by_containerd_is_exported_from_it(self):
+        run,calls=self.run_helper('containerd-only')
+        self.assertEqual(run.returncode,0,run.stderr)
+        self.assertIn('images export',calls)
+        self.assertNotIn('docker save',calls)
+        self.assertIn('images import --no-unpack',calls)
 
     def test_disk_reserve_and_vm_identity_fail_before_import(self):
         for mode in ['full','mismatch']:

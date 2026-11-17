@@ -342,20 +342,11 @@ Upstream changes do not flow here automatically.
 
 ## Inspected backend source-only updates
 
-For a backend/src-only change with unchanged dependencies, shared packages,
-configuration and frontend source, explicitly set
-`ZOER_BACKEND_SOURCE_BASE_IMAGE` and `ZOER_FRONTEND_REUSE_IMAGE` to the exact
-currently deployed local development tags before running `zoer-deploy.sh`.
-The helper compares backend dependency/config hashes, reuses source-tagged
-runtime images and the unchanged frontend, copies backend/src and typechecks it
-with a 3 GiB Node heap and core dumps disabled. It uses the daemon-backed builder
-to resolve the node's existing local image; this opt-in path has no package or
-network installs. Review shared-package/frontend equality separately; those
-inputs are not replaced by this path. The normal maintenance drain, rollout,
-previous-image receipt and health checks remain in use. Keep two generations for
-rollback. Use a full capped build for dependency, shared-package, configuration,
-runtime or frontend changes. Do not infer source-only safety from Git revision
-alone when either checkout/image contains uncommitted changes.
+Set `ZOER_BACKEND_SOURCE_BASE_IMAGE` and `ZOER_FRONTEND_REUSE_IMAGE` to the deployed image tags for a source-only backend release with an unchanged frontend. The preflight compares workspace, backend and SDK dependency manifests, the lockfile and backend configuration against the base. A mismatch requires a full build. The backend image refreshes backend source, skills, scraper scripts, shared SDK source and Convex references.
+
+Set `ZOER_BROWSER_RUNTIME_REUSE_IMAGE` to the deployed browser-runtime tag to retain the worker image and placement. Preflight checks both Docker and containerd. It can load a base image from containerd into Docker. Run `ZOER_BUILD_PREFLIGHT_ONLY=1 ./scripts/zoer-local-build.sh` with the release settings to exercise these checks before building. A source-only release that needs to build a missing browser runtime requires `ZOER_ALLOW_RUNTIME_BUILD=1` and disk headroom for a runtime build.
+
+The source-only build verifies a supplied `ZOER_SOURCE_PRECHECK_SHA256` against the synchronized source. Without a receipt it runs TypeScript in the daemon-backed builder with a 3072 MiB Node heap by default. Set `ZOER_SOURCE_NODE_HEAP_MB` to reduce the heap for smaller nodes. Deployment cleanup can drop Docker copies of backend, frontend and browser-runtime images already in containerd. The disk gate budgets 15 GiB of temporary space when a source base needs to be loaded back into Docker.
 
 Deployment now reserves 10% of the filesystem plus 15 GiB for normal builds, or
 5 GiB for an explicitly inspected source-only update. Passing a memory gate does
@@ -429,6 +420,6 @@ image tags, workload qualifications and measurements in the dated ui-audit.
 
 ## Reconciled operator tooling (2026-10-19)
 
-The source-only backend path now refreshes shared API type source and Convex function references as well as backend source. It propagates the checked browser and agent runtime tags. Dependency/config changes still require a full build. Source-only TypeScript has a 2 GiB Node heap; keep at least 1.5 GiB additional node memory free (`ZOER_BUILD_MEM=2048m` uses the matching 3584 MiB preflight). The check refuses the rollout if capacity is below that budget. Prebuilt frontend assets are built locally with the exact source revision; the node uses the existing Nginx image.
+The source-only backend records the selected browser, agent and build-runner image tags. Prebuilt frontend assets are built locally with the exact source revision. The node uses the existing Nginx image.
 
 Deployment, drain/resume, browser-worker, SSH and sandbox operator scripts and their tests are versioned here. Optional SSH provisioning is explicit; committing these scripts does not enable remote access. Do not commit operator `output/` or private credential files. App/runtime pruning protects running and rollback references and does not remove site volumes. Set `ZOER_AUTO_CLEANUP=0` to preserve caches and all image candidates during a release.
