@@ -16,7 +16,8 @@ patches:
         value: 1536Mi
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 3Gi
+        # A 100 MiB page-read download peaked at 3000 MiB under the old 3 GiB limit (2026-11-18).
+        value: 5Gi
       # A busy renderer can take the full 60-second page deadline. Keep its
       # service endpoint through transient health delays during that request.
       - op: add
