@@ -9,3 +9,6 @@ kubeconfig.yml
 .vault-pass
 *.vault-pass
 __pycache__/
+
+# Operator audit output (see docs/ZOER-LOCAL.md: do not commit)
+output/
