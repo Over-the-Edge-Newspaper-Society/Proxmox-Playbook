@@ -6,14 +6,20 @@ image="${1:?Pass the exact browser-runtime image tag}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/ote-k3s.yaml}"
 node="${PLAYWRIGHT_WORKER_NODE:-$(kubectl -n "${ZOER_NAMESPACE:-zoer}" get deployment zoer-backend -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="PLAYWRIGHT_WORKER_NODE")].value}' 2>/dev/null || true)}"
 [[ -n "$node" ]] || { echo 'No dedicated browser node configured; runtime remains on the application node.'; exit 0; }
-[[ "$node" == zoer-browser-worker-1 ]] || { echo 'Review access for the configured browser node before importing.'; exit 1; }
-host="${ZOER_PROXMOX_HOST:-root@10.70.20.10}"
 server="${ZOER_K8S_DEV_HOST:-ubuntu@10.70.20.50}"
 key="${ZOER_K8S_DEV_SSH_KEY:-$HOME/.ssh/personalprox_pve_ed25519}"
+ssh_args=(-o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -i "$key")
+# The local build imports the runtime before this placement check.
+if [[ "$node" == k3s-node-1 ]]; then
+  ssh "${ssh_args[@]}" "$server" "sudo -n k3s ctr -n k8s.io images label '$image' io.cri-containerd.pinned=pinned >/dev/null"
+  echo "Pinned $image on the application node."
+  exit 0
+fi
+[[ "$node" == zoer-browser-worker-1 ]] || { echo 'Review access for the configured browser node before importing.'; exit 1; }
+host="${ZOER_PROXMOX_HOST:-root@10.70.20.10}"
 vmid="${ZOER_BROWSER_VMID:-211}"
 [[ "$vmid" =~ ^[0-9]+$ ]] || exit 2
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-ssh_args=(-o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -i "$key")
 ip="$(kubectl get node "$node" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
 ssh "${ssh_args[@]}" "$host" "qm agent $vmid network-get-interfaces" > "$work/interfaces.json"
 ssh "${ssh_args[@]}" "$host" "qm guest exec $vmid -- cat /etc/ssh/ssh_host_ed25519_key.pub" > "$work/key.json"

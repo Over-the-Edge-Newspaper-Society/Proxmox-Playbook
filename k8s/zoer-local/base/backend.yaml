@@ -56,7 +56,7 @@ spec:
             - name: K8S_IMAGE_PULL_POLICY
               value: IfNotPresent
             - name: PLAYWRIGHT_WORKER_NODE
-              value: zoer-browser-worker-1
+              value: k3s-node-1
             - name: PLUGIN_RUNNER_MODE
               value: kubernetes
             - name: PLUGIN_RUNNER_CONTAINER_IMAGE
@@ -114,6 +114,9 @@ spec:
             - name: CSP_CONNECT_SRC_EXTRA
               value: http://*.k8s.ote ws://*.k8s.ote https://*.k8s.overtheedgepaper.ca wss://*.k8s.overtheedgepaper.ca
           envFrom:
+            - configMapRef:
+                name: zoer-wordpress-pilot-config
+                optional: true
             - secretRef:
                 name: zoer-app-secret
             - secretRef:

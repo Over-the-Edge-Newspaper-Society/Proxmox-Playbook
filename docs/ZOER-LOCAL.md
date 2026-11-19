@@ -380,7 +380,17 @@ mode removes computer/site/project storage or deploys Convex functions when
 `--skip-convex` is supplied.
 
 
-## Small browser-only worker
+## Browser placement on OTE
+
+The OTE manifest selects `PLAYWRIGHT_WORKER_NODE=k3s-node-1`. Compact Playwright
+workers run as ordinary pods alongside the applications. Each worker requests
+2 GiB and admits up to two browser sessions. The local build imports and pins the
+runtime on this node. Saved workers retain their own runtime, capacity and volume
+bindings. Before moving one, stop its writers and verify an offline copy of its
+local volume on the target node. A node selector change alone cannot move it.
+
+### Optional dedicated browser node
+
 
 `./scripts/zoer-browser-worker-create.sh` creates the dedicated browser VM from
 the existing Ubuntu cloud-init template, with 3 GiB fixed RAM, 2 vCPU and a 32 GiB
@@ -392,8 +402,8 @@ reruns. The browser node has a NoSchedule taint; the local-path provisioner's
 storage helper receives its narrow matching toleration. Tokens remain in private
 files; scripts must never print them or disable host-key checking.
 
-The backend manifest opts new compact stock Playwright workers into
-`PLAYWRIGHT_WORKER_NODE=zoer-browser-worker-1`. Those workers reserve/limit 2 GiB
+To opt a separate browser node into a future deployment, set
+`PLAYWRIGHT_WORKER_NODE=zoer-browser-worker-1` after provisioning it. Those workers reserve/limit 2 GiB
 and admit at most two isolated browser processes, including the warm spare.
 Existing saved browser workers/volumes retain their original node and slot policy.
 Global browser settings count all nodes and preserve budgets needed by existing
