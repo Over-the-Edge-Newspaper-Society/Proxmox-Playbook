@@ -11,10 +11,10 @@ k3s_vm_id: 210             # 200/201 are the minio and postgres LXCs; 210 is the
 k3s_vm_name: k3s-node-1
 k3s_vm_template: ubuntu-2404-cloudinit
 k3s_vm_template_id: 9000   # source template cloned by this role (see 70-create-cloudinit-template.yml)
-k3s_vm_cores: 8
-k3s_vm_memory: 12288       # 12 GB ceiling
-k3s_vm_balloon: 4096       # Proxmox reclaims down to 4 GB under host pressure
-k3s_vm_disk_size: 60G
+k3s_vm_cores: 10
+k3s_vm_memory: 20480       # 20 GiB for applications and browser pods
+k3s_vm_balloon: 0          # Fixed memory for consistent Kubernetes scheduling
+k3s_vm_disk_size: 314G
 k3s_vm_storage: local-lvm
 k3s_vm_bridge: vmbr0
 

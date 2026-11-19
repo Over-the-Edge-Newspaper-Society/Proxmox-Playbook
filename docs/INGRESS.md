@@ -82,7 +82,7 @@ name you would use to fix it.
 
 ## Retired
 
-CT 108 (`nginxproxymanager`) is **stopped, not destroyed**. It held eight proxy
+CT 108 (`nginxproxymanager`) was backed up and removed on November 17, 2026. It held eight proxy
 hosts; at retirement five upstreams were already dead and three had moved into
 the cluster:
 
@@ -100,5 +100,6 @@ the cluster:
 Also stopped as redundant: **CT 104** (Tika) and **CT 105** (Gotenberg), both
 replaced by in-cluster Deployments in the `paperless` namespace.
 
-To roll back: `pct start 108`, then repoint the UniFi records at
-`10.70.20.104`.
+The Tika and Gotenberg guests were also archived and removed on November 17.
+To recover the old proxy, restore CT 108 from the [retirement backup set](../README.md)
+and verify its upstreams before changing any DNS records.

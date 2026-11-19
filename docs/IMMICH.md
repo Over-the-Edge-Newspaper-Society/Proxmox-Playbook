@@ -76,5 +76,6 @@ The Immich app stores the server URL **per device**. When the bare
 
 ## Rollback
 
-CT 100 still exists, stopped, with its original data. `pct start 100` brings the
-old v1.143.1 instance back. Do not run both against the same NAS library.
+CT 100 was archived and removed on November 17, 2026. Recover the guest from
+the [retirement backup set](../README.md). Restore its photo library to an
+isolated destination before starting the old instance.

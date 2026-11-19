@@ -87,15 +87,19 @@ the 8 that were not created already existed, which is the migrated data.
 
 ## The old LXC containers
 
-**CT 206 `eventscrape`** — the source of this migration, now **fully stopped**
+CTs 106 and 206 were archived and removed on November 17, 2026. Recover them
+from the [retirement backup set](../README.md) onto an isolated network.
+The following descriptions record what each guest held at migration time.
+
+**CT 206 `eventscrape`** — the source of this migration, then **fully stopped**
 with `onboot: 0` so a host reboot does not resurrect it. Leaving it stopped is
 deliberate: if both deployments run, they scrape the same sources into two
 separate databases that immediately diverge.
 
-Its disk is kept as the rollback: `/root/esc-snapshot.zip` (139 MB) and
+The archived filesystem includes `/root/esc-snapshot.zip` (139 MB) and
 `/opt/eventscrape` (506 MB).
 
-To restore the LXC deployment:
+Inside an isolated restored CT 206, the former service command was
 `cd /opt/eventscrape && docker compose -f docker-compose.server.yml up -d`
 
 **CT 106 `events`** — an older PostgreSQL-era generation, already broken before

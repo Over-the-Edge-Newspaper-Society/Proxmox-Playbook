@@ -25,9 +25,15 @@ Automated deployment on Proxmox VE using Ansible, in two stacks:
 - [docs/PAPERLESS.md](docs/PAPERLESS.md) — Paperless-ngx v3 on K3s, the mandatory
   v2.20.15 upgrade hop, the PAPERLESS_PORT collision, and backup/restore.
 
-> **Current state (2026-09-14):** the OTEManager LXC stack is retired. CT 202 was
-> destroyed on 2026-09-11, and **CTs 200 (minio) and 201 (postgres) were stopped**
-> on 2026-09-14 — containers and disks kept, so they start again instantly.
+> **Guest retirement, November 17, 2026.** CTs 100, 102, 104, 105, 106, 108,
+> 110, 200, 201 and 206 were backed up and removed. Their former IDs may be reused.
+> For recovery, follow `RESTORE.md` in the Documents NAS backup set
+> `k8s-backups/proxmox-retirement-20261118T022525Z`. The passphrase is held
+> separately by the operator. The Immich, Paperless and MinIO NAS directories were
+> preserved and archived separately. CT 202 was removed on September 11.
+> VM 210 now hosts application and browser pods with 10 vCPUs and 20 GiB of RAM.
+> VM 211 is retained offline for rollback. The architecture diagram below records
+> the original deployment.
 > OTEManager now runs on K3s and uses **Convex for both records and files**, so it
 > needs neither PostgreSQL nor S3. See [docs/OTEMANAGER.md](docs/OTEMANAGER.md).
 > Playbooks `10`–`40` still rebuild the LXC stack if you ever want it back.
@@ -72,11 +78,12 @@ Automated deployment on Proxmox VE using Ansible, in two stacks:
 | VMID | Hostname | IP | Role | OS | Cores | RAM | Disk |
 |------|----------|-----|------|-----|-------|-----|------|
 | 9000 | ubuntu-2404-cloudinit | — | Cloud-init template | Ubuntu 24.04 | 2 | 2GB | 3.5GB |
-| 210 | k3s-node-1 | 10.70.20.50 | K3s control plane + worker | Ubuntu 24.04 | 8 | 12GB (balloon 4GB) | 60GB |
+| 210 | k3s-node-1 | 10.70.20.50 | K3s control plane, applications and browser pods | Ubuntu 24.04 | 10 | 20 GiB fixed | 314 GiB |
+| 211 | zoer-browser-worker-1 | — | Retained offline for rollback | Ubuntu 24.04 | 6 | 8 GiB configured | 64 GiB |
 
 Host capacity is the binding constraint: the mini PC is an **AMD Ryzen AI 9 HX 370**
 with **12 cores / 24 threads and 27 GB RAM** — not the 60 GB some older notes claimed.
-The K3s VM balloons down to 4 GB so the LXC stack keeps its headroom.
+The K3s VM uses fixed memory for Kubernetes scheduling. Review host headroom before powering on the former browser VM.
 
 ## Container Details
 
@@ -379,15 +386,13 @@ case above, from the other direction. It is scoped to `10.70.20.50/32` rather th
 `10.70.20.0/24`: a subnet-wide export would give every host on the LAN read-write
 access to every PersistentVolume in the cluster.
 
-### K3s: storage is local-disk-backed, not NAS-backed
+### K3s storage on Proxmox
 
-`/mnt/nas-k8s` is a plain directory on `pve-root` (**94 GB total, ~82 GB free**), not
-a NAS share. The UNAS Pro restricts each export to a client allow-list that currently
-holds only `10.70.20.10`, and it has no K8s share at all — it exports `Images`,
-`Article`, `Documents` and `Immich`. To move cluster volumes onto the NAS, either add
-a K8s share and re-export it through Proxmox (needs `fsid=`, and nested NFS
-re-export is fragile), or add `10.70.20.50` to the NAS allow-list and point the
-StorageClass straight at `10.70.20.101`.
+The Proxmox host exports a dedicated 192 GiB ext4 volume at `/mnt/nas-k8s`.
+Kubernetes reaches it at `10.70.20.10:/mnt/nas-k8s`. The logical volume
+`pve/zoer-nfs-data` draws space from the same NVMe thin pool as the VMs.
+Monitor both the filesystem and the pool. See [Kubernetes storage](docs/KUBERNETES.md#storage)
+for mount checks and the migration recovery point.
 
 ### Proxmox has two addresses — do not confuse them
 

@@ -125,6 +125,6 @@ its next run; trigger one manually to confirm before walking away.
 
 ## Rollback
 
-CT 102 still exists, stopped, with its original data and v2.18.4. Note the
-database was migrated **in place** -- a rollback needs the pre-migration dump,
-not just `pct start 102`.
+CT 102 was archived and removed on November 17, 2026. Recover the old v2.18.4
+guest from the [retirement backup set](../README.md). Its database was migrated
+in place, so a rollback to that version also needs the pre-migration dump.

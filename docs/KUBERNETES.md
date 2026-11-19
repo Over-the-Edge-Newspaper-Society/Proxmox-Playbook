@@ -99,16 +99,19 @@ sudo k3s ctr -n k8s.io images label <image> io.cri-containerd.pinned=pinned
 `nfs-nas` is the default StorageClass, `reclaimPolicy: Retain`. It points at
 `10.70.20.10:/mnt/nas-k8s`, an NFS export served by the **Proxmox host**.
 
-> **`/mnt/nas-k8s` is a local directory on `pve-root`, not the NAS.**
-> Every UNAS Pro export is restricted to a client allow-list containing only
-> `10.70.20.10`, and the NAS has no K8s share — it exports `Images`, `Article`,
-> `Documents`, `Immich` and nothing else. So cluster volumes live on the Proxmox
-> root filesystem (94 GB) and are **not** redundant.
->
-> To move them onto the NAS: either create a K8s share and add `10.70.20.10` to
-> its allow-list then re-export through Proxmox (needs `fsid=`; nested NFS
-> re-export is fragile), or add `10.70.20.50` to the NAS allow-list and point the
-> StorageClass straight at `10.70.20.101`.
+The 192 GiB logical volume `pve/zoer-nfs-data` provides an ext4 filesystem on
+the Proxmox NVMe. The host mounts it at `/mnt/nas-k8s` through `/etc/fstab`.
+The NFS export uses the `mountpoint` option so that an unavailable volume cannot
+expose an empty directory on the root filesystem. Check `findmnt /mnt/nas-k8s`,
+`df -h / /mnt/nas-k8s`, and `lvs -o lv_name,origin,data_percent,metadata_percent`
+on Proxmox. Inspect the mount dependency and existing logical volume before
+repairing a failed mount.
+
+The read-only thin snapshot `pve/zoer-nfs-cutover-20261117` records the
+quiescent migration state. It shares the same physical drive. For recovery,
+inspect it using an isolated read-only mount and account for writes since
+cutover before restoring data. The export path and existing PV/PVC bindings
+were preserved during the move.
 
 `no_root_squash` is required on the export — the CSI driver `chown`s each
 volume directory it provisions. The export is scoped to `10.70.20.50/32`, not
