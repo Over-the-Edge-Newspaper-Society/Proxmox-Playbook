@@ -10,4 +10,4 @@ resources:
 # image and never contacts a registry.
 images:
   - name: docker.io/otemanager-local/app
-    newTag: dev-1789395915-c8492df-dirty
+    newTag: dev-1792540997-66da9b2-dirty

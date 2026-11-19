@@ -5,6 +5,7 @@ set -Eeuo pipefail
 #   ./scripts/otemanager-deploy.sh                 # convex functions + image + rollout
 #   ./scripts/otemanager-deploy.sh --skip-convex   # image only (faster)
 #   ./scripts/otemanager-deploy.sh --keep 5        # keep N old dev images (default 3)
+#   ./scripts/otemanager-deploy.sh --local-build # build amd64 locally, import on node
 #   ./scripts/otemanager-deploy.sh --rollback      # back to the previous image
 #
 # What it does, in order:
@@ -41,6 +42,7 @@ ROLLBACK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-convex) SKIP_CONVEX=1; shift ;;
+    --local-build) export OTE_BUILD_LOCAL=1; shift ;;
     --keep) KEEP="$2"; shift 2 ;;
     --rollback) ROLLBACK=1; shift ;;
     -h|--help) grep -m22 '^#' "$0" | tail -n +2 | sed 's/^#\{1,\} \{0,1\}//'; exit 0 ;;
@@ -71,14 +73,17 @@ if [[ "$SKIP_CONVEX" == "0" ]]; then
   # calls functions that do not exist yet. Deploying is idempotent and fast
   # when nothing changed, so it runs by default.
   echo "==> deploying Convex functions"
-  POD="$(kubectl -n "$NS" get pod -l app=otemanager-convex -o jsonpath='{.items[0].metadata.name}')"
+  POD="$(kubectl -n "$NS" get pod -l app=otemanager-convex --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "$POD" ]] || { echo "No running Convex pod found in $NS" >&2; exit 1; }
   ADMIN_KEY="$(kubectl -n "$NS" exec "$POD" -- sh -c 'cd /convex && ./generate_admin_key.sh' \
     | grep -oE '[A-Za-z0-9_-]+\|[A-Za-z0-9_-]+' | tail -1)"
   kubectl -n "$NS" port-forward svc/otemanager-convex "$PORT:3210" >/dev/null 2>&1 &
   PF=$!
   cleanup_pf() {
     kill $PF 2>/dev/null || true
-    [[ -f "$REPO/.env.local.deploy-bak" ]] && mv "$REPO/.env.local.deploy-bak" "$REPO/.env.local"
+    if [[ -f "$REPO/.env.local.deploy-bak" ]]; then
+      mv "$REPO/.env.local.deploy-bak" "$REPO/.env.local"
+    fi
   }
   trap cleanup_pf EXIT
   for _ in $(seq 1 30); do curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/version" && break; sleep 1; done
@@ -93,7 +98,11 @@ if [[ "$SKIP_CONVEX" == "0" ]]; then
 fi
 
 # ------------------------------------------------------------------ build ---
-echo "==> building on $SERVER_HOST"
+if [[ "${OTE_BUILD_LOCAL:-0}" == "1" ]]; then
+  echo "==> building locally for $SERVER_HOST"
+else
+  echo "==> building on $SERVER_HOST"
+fi
 BUILD_LOG="$(mktemp)"
 "$HERE/otemanager-local-build.sh" | tee "$BUILD_LOG"
 TAG="$(grep -oE 'BUILD COMPLETE: (.+)' "$BUILD_LOG" | sed 's/BUILD COMPLETE: //')"

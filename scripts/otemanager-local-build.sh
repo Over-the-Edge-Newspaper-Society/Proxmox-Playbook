@@ -32,6 +32,23 @@ image_tag="dev-$(date +%s)-$short_sha$dirty_suffix"
 image="docker.io/otemanager-local/app:$image_tag"
 echo "IMAGE_TAG=$image_tag"
 
+# Build off the cluster when it cannot spare the memory for Vite/Nitro.
+# Apple Silicon's Docker runtime must support amd64 emulation. Only the
+# finished image is streamed to the node; source and env files stay local.
+if [[ "${OTE_BUILD_LOCAL:-0}" == "1" ]]; then
+  echo "=== [1/2] build amd64 locally ==="
+  docker build --platform linux/amd64 -t "$image" "$repo_root"
+  [[ "$(docker image inspect "$image" --format '{{.Architecture}}')" == "amd64" ]] || {
+    echo "Built image is not amd64" >&2; exit 1;
+  }
+  echo "=== [2/2] import into k3s containerd + pin ==="
+  docker save "$image" | ssh "${ssh_args[@]}" "$server_host" "sudo -n k3s ctr -n k8s.io images import -"
+  remote "sudo -n k3s ctr -n k8s.io images label '$image' io.cri-containerd.pinned=pinned >/dev/null"
+  remote "sudo -n k3s ctr -n k8s.io images list -q | grep -Fx '$image'"
+  echo "BUILD COMPLETE: $image_tag"
+  exit 0
+fi
+
 avail_mb="$(ssh "${ssh_args[@]}" "$server_host" "free -m | awk '/^Mem:/{print \$7}'" 2>/dev/null || echo 0)"
 echo "=== node memory available: ${avail_mb} MB (need >= ${MIN_FREE_MB} MB) ==="
 if [[ "${avail_mb:-0}" -lt "$MIN_FREE_MB" ]]; then

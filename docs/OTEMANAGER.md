@@ -16,8 +16,9 @@ file storage to Convex") moved **both records and uploaded files** into Convex.
 | File storage | MinIO S3, CT 200 | Convex |
 | Runtime | Node on LXC | TanStack Start / Nitro in a pod |
 
-**CTs 200 and 201 were stopped on 2026-09-14** (containers and disks kept, so
-they can be started again instantly). Both were verified idle first — zero
+CTs 200 and 201 were stopped on September 14. Both guests and the MinIO NAS
+directory were archived before the guests were removed on November 17, 2026.
+Recovery instructions accompany the [retirement backup set](../README.md). Both were verified idle first — zero
 Postgres client connections, zero MinIO connections, no MinIO log activity in
 24h. Playbooks `10`–`30` still provision them if they are ever needed again.
 
@@ -90,8 +91,11 @@ has local modifications, which makes it obvious what is running.
 |---|---|
 | *(none)* | Convex functions → build → apply → wait → prune |
 | `--skip-convex` | Skip the Convex function deploy (faster when only app code changed) |
+| `--local-build` | Build an amd64 image with local Docker and stream it into the cluster; use when the node cannot spare build memory |
 | `--keep N` | Keep N old dev images on the node (default 3) |
 | `--rollback` | Return to the previously deployed image |
+
+The app has one replica and uses `maxSurge: 0`, `maxUnavailable: 1` so a deployment can replace it when the node's memory reservations are full. Expect a brief interruption while the replacement starts. `--local-build` keeps Vite/Nitro build memory off the cluster and requires a running local Docker engine with amd64 support.
 
 What it handles that a manual `build && apply` does not:
 

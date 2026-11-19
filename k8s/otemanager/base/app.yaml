@@ -4,6 +4,13 @@ metadata:
   name: otemanager
 spec:
   replicas: 1
+  # The single cluster node cannot reserve another app's memory during a
+  # surge. Replace this replica before scheduling its successor.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: otemanager
