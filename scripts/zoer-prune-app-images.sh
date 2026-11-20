@@ -52,14 +52,24 @@ kubectl get pods -A -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.i
 sort -u "$protected" -o "$protected"
 
 # "<epoch> <store> <ref>" for every backend/frontend image in either store.
-remote 'for ref in $(sudo -n k3s ctr -n k8s.io images list -q | grep -E "zoer-local/(backend|frontend):"); do
+# Both stores give RFC3339 creation times. Docker's human {{.CreatedAt}} is not
+# used: it carries the node's zone name ("2026-11-18 17:05:13 -0700 MST"),
+# which GNU date rejects, and the failed parse turned the line into
+# " docker <ref>" - the loop below then read "docker" as a creation time and
+# died with "docker: unbound variable" before removing anything.
+# An image whose time cannot be read is reported and left alone.
+remote 'stamp() {
+          ts=$(date -u -d "$3" +%s 2>/dev/null) && echo "$ts $1 $2" \
+            || echo "zoer-prune-app-images: unreadable creation time \"$3\" for $1 $2; leaving it alone" >&2
+        }
+        for ref in $(sudo -n k3s ctr -n k8s.io images list -q | grep -E "zoer-local/(backend|frontend):"); do
           created=$(sudo -n k3s crictl inspecti -o json "$ref" 2>/dev/null | jq -r ".info.imageSpec.created // empty")
-          [ -n "$created" ] && echo "$(date -u -d "$created" +%s) containerd $ref"
+          if [ -n "$created" ]; then stamp containerd "$ref" "$created"; fi
         done
-        sudo -n docker images --format "{{.CreatedAt}}|{{.Repository}}:{{.Tag}}" 2>/dev/null \
-          | grep -E "\|zoer-local/(backend|frontend):" | while IFS="|" read -r created ref; do
-              echo "$(date -u -d "${created% UTC}" +%s) docker $ref"
-            done' | awk '{ sub(/^docker\.io\//, "", $3); print }' > "$present"
+        for ref in $(sudo -n docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^zoer-local/(backend|frontend):"); do
+          created=$(sudo -n docker image inspect -f "{{.Created}}" "$ref" 2>/dev/null)
+          if [ -n "$created" ]; then stamp docker "$ref" "$created"; fi
+        done' | awk 'NF == 3 && $1 ~ /^[0-9]+$/ { sub(/^docker\.io\//, "", $3); print }' > "$present"
 
 now=$(date +%s)
 fresh_after=$(( now - FRESH_HOURS * 3600 ))
