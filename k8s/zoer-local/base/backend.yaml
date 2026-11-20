@@ -91,6 +91,10 @@ spec:
             # mode unless this is exactly "1" (see backend/src/repo-providers.ts).
             - name: DEV_ALLOW_PASSWORDLESS_GITHUB
               value: "1"
+            # Lets the open-access identity use password banks (Zoer PR #85). Set live on
+            # 2026-11-19; anyone who can reach this instance can use the saved passwords.
+            - name: DEV_ALLOW_PASSWORDLESS_PASSWORD_BANKS
+              value: "1"
             # --- CloakBrowser Manager (default external backend when configured) ---
             - name: CLOAK_BROWSER_MANAGER_URL
               value: http://zoer-cloakbrowser:8080
@@ -145,7 +149,9 @@ spec:
               memory: 1Gi
               ephemeral-storage: 1Gi
             limits:
-              memory: 2Gi
+              # Each catalog write holds a full in-memory snapshot of the plugin
+              # database (882 MB for BC Bid on 2026-11-17); 2Gi was OOM-killed.
+              memory: 4Gi
               ephemeral-storage: 4Gi
       volumes:
         - name: backend-data
