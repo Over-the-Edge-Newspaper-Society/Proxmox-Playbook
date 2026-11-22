@@ -185,6 +185,11 @@ migration of an occupied catalog.
   rest; then `zoer-prune-runtimes.sh --apply` removes browser/agent runtimes no remaining backend
   image or pod references; then day-old default-builder cache is trimmed. Before this, named builds
   were never pruned and pinned their runtimes, so the node reached 93% on 2026-10-17.
+  Image ages come from RFC3339 creation times (`crictl inspecti`, `docker image inspect`): on
+  2026-11-20 the app prune died with `docker: unbound variable` and removed nothing, because
+  Docker's human `CreatedAt` carries the node's zone name (`-0700 MST`), which GNU `date -d`
+  rejects. `python3 -m unittest tests.test_zoer_prune_app_images` covers the keep/remove
+  rules against a stubbed node.
 - **Excludes generated artifacts.** `output/` alone is ~689 MB across 49k files
   and was previously rsynced into the build context on every build; it is now in
   `.gitignore`, `.dockerignore` and the rsync excludes.

@@ -16,6 +16,19 @@ resources:
   - gateway.yaml
   - wordpress-domains.yaml
   - t3code-hosts.yaml
+  - bypassv3.yaml
 
 # Managed WordPress uses the installed cert-manager DNS-01 issuer. Generic
 # Sites domains remain separate from this WordPress runtime setup.
+
+# Code for the zoer-bypassv3 service lives in bypassv3/ and is generated into a
+# ConfigMap kustomize mounts at /app/ in the pod. The Python files must be in
+# this base directory because kustomize's default loader won't reach up the tree
+# to scripts/bypassv3/; the test suite enforces that bypassv3/bypass.py matches
+# scripts/bypassv3/bypass.py byte for byte.
+configMapGenerator:
+  - name: zoer-bypassv3-app
+    files:
+      - bypassv3/bypass.py
+      - bypassv3/server.py
+      - bypassv3/requirements.txt
