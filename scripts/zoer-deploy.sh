@@ -334,3 +334,5 @@ for url in http://zoer.k8s.ote https://zoer.k8s.overtheedgepaper.ca; do
 done
 echo "build provenance:"
 curl -s --max-time 15 http://zoer.k8s.ote/api/health | sed 's/^/  /'; echo
+# Saved browsers keep the runtime their worker was created with; report any left behind.
+"$HERE/zoer-browser-runtime-check.sh" || true
