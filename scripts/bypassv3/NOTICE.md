@@ -17,12 +17,27 @@ authorized to test." This vendored copy is included for authorized testing of
 Zoer-owned backends' reCAPTCHA v3 verification only. It is not for use against
 third-party sites' bot protection.
 
+## Two copies in this repo
+
+`bypass.py` lives in two places and the pair must stay byte-equal:
+
+1. `scripts/bypassv3/bypass.py` (canonical, Mac/CI helper, imported by
+   `scripts/zoer-bypassv3-token.py`).
+2. `k8s/zoer-local/base/bypassv3/bypass.py` (ConfigMap-mounted into the
+   `zoer-bypassv3` service pod on OTE; kustomize's default loader won't reach
+   outside the base directory, which is why the file is duplicated).
+
+`tests/test_zoer_bypassv3_service.py::CopyConsistencyTests` enforces the match
+via sha256.
+
 ## Updating
 
 To refresh this vendored copy against a newer upstream commit:
 
 1. Pick the new upstream commit SHA.
-2. Replace `bypass.py` with the file at
+2. Replace `scripts/bypassv3/bypass.py` with the file at
    `https://raw.githubusercontent.com/EvickaStudio/BypassV3/<SHA>/bypass.py`.
-3. Update the "Pinned commit" line above with the new SHA.
-4. Run `python3 -m unittest tests.test_zoer_bypassv3_token` from the repo root.
+3. Copy the same file to `k8s/zoer-local/base/bypassv3/bypass.py`.
+4. Update the "Pinned commit" line above with the new SHA.
+5. Run `python3 -m unittest tests.test_zoer_bypassv3_token
+   tests.test_zoer_bypassv3_service` from the repo root.

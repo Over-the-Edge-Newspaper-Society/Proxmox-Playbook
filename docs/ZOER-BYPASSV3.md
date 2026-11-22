@@ -30,7 +30,13 @@ That is outside upstream's scope and outside why this copy is in the repo.
 | `scripts/bypassv3/LICENSE` | Apache-2.0 full text |
 | `scripts/bypassv3/NOTICE.md` | Upstream URL, pinned commit, update recipe |
 | `scripts/zoer-bypassv3-token.py` | Executable shim that delegates to `bypassv3.cli.main()` |
+| `k8s/zoer-local/base/bypassv3.yaml` | Deployment + Service for the in-cluster helper |
+| `k8s/zoer-local/base/bypassv3/bypass.py` | Byte-equal copy of the vendored library (kustomize cannot reach `scripts/`) |
+| `k8s/zoer-local/base/bypassv3/server.py` | Stdlib HTTP service that wraps the library |
+| `k8s/zoer-local/base/bypassv3/requirements.txt` | Pinned `requests==2.34.2`, installed at pod start |
+| `k8s/zoer-local/base/bypassv3/NOTICE.md` | Points back at `scripts/bypassv3/` for attribution |
 | `tests/test_zoer_bypassv3_token.py` | Vendor-layout checks and CLI tests against mocked network |
+| `tests/test_zoer_bypassv3_service.py` | ConfigMap-copy sha256 check, manifest shape, ephemeral HTTP server tests |
 
 ## Requirements
 
@@ -80,14 +86,71 @@ Flags:
 - `--enterprise` — resolve against the reCAPTCHA Enterprise endpoint.
 - `--max-retries` — attempts before giving up (default 3).
 
+## In-cluster service (`zoer-bypassv3`)
+
+For automation that drives Zoer's browser pods (CloakBrowser, BlitzBrowser) to
+exercise a reCAPTCHA v3 flow on a Zoer-owned test app, a small HTTP service
+runs alongside the browsers in the `zoer` namespace. The service is
+browserless: it calls Google's reCAPTCHA endpoints directly and returns a
+token.
+
+- **Deployment / Service:** `zoer-bypassv3` on `ClusterIP` port 8080. No
+  Ingress — the service is reachable only from inside the cluster.
+- **Image:** stock `python:3.12-slim` pinned by digest; Python code is mounted
+  from the kustomize-generated ConfigMap `zoer-bypassv3-app`. `requests` is
+  `pip install --user --no-cache-dir`-ed on pod start (needs PyPI egress).
+- **Endpoints:**
+  - `GET /healthz` → `200 {"ok": true}` (used by both readiness and liveness
+    probes).
+  - `POST /token` with a JSON body of either shape; returns `200 {"token": "..."}`
+    on success or `4xx`/`5xx` with an `error` string.
+
+Site-key request:
+
+```http
+POST /token HTTP/1.1
+Content-Type: application/json
+
+{"site_key": "...", "origin": "https://app.k8s.ote", "action": "login",
+ "enterprise": false, "max_retries": 3}
+```
+
+Anchor-URL request (if you have one captured from the real browser's network tab):
+
+```http
+POST /token HTTP/1.1
+Content-Type: application/json
+
+{"anchor_url": "https://www.google.com/recaptcha/api2/anchor?...",
+ "action": "login", "max_retries": 3}
+```
+
+From a browser-automation pod in the same namespace:
+
+```bash
+curl -fsS -X POST http://zoer-bypassv3:8080/token \
+  -H 'Content-Type: application/json' \
+  -d '{"site_key":"'"$KEY"'","origin":"https://app.k8s.ote","action":"login"}'
+# -> {"token": "..."}
+```
+
+Deployment is managed by `scripts/zoer-deploy.sh` through the shared kustomize
+flow (added as a resource in `k8s/zoer-local/base/kustomization.yaml`). The
+browser Deployments (`zoer-cloakbrowser`, `zoer-blitzbrowser`, workers) are
+NOT modified; automation calls this service and injects the returned token
+into the test app's reCAPTCHA field.
+
 ## Testing it in the repo
 
 ```bash
-python3 -m unittest tests.test_zoer_bypassv3_token
+python3 -m unittest tests.test_zoer_bypassv3_token tests.test_zoer_bypassv3_service
 ```
 
-The tests patch `ReCaptchaV3Bypass` and never touch Google. They verify the
-vendored layout, the CLI argparse surface, and the token print/error paths.
+Both suites patch `ReCaptchaV3Bypass` and never touch Google. The CLI suite
+verifies the vendored layout, argparse surface, and token print/error paths.
+The service suite enforces byte-equality between the two copies of
+`bypass.py`, checks the kustomization wiring, and drives `server.py` through
+an ephemeral local HTTP server.
 
 ## Updating the vendored copy
 
